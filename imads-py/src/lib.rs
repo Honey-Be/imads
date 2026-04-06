@@ -15,7 +15,8 @@ use imads_core::types::{Env, Phi, XReal};
 // PyEngineConfig
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "EngineConfig")]
+
+#[pyclass(name = "EngineConfig", from_py_object)]
 #[derive(Clone)]
 struct PyEngineConfig {
     inner: EngineConfig,
@@ -51,7 +52,7 @@ impl PyEngineConfig {
 // PyEnv
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Env")]
+#[pyclass(name = "Env", from_py_object)]
 #[derive(Clone)]
 struct PyEnv {
     inner: Env,
@@ -144,7 +145,7 @@ unsafe impl Sync for PyEvaluator {}
 
 impl Evaluator for PyEvaluator {
     fn cheap_constraints(&self, x: &XReal, _env: &Env) -> bool {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let vals = x.as_f64_slice();
             match self.obj.call_method(py, "cheap_constraints", (vals,), None) {
                 Ok(result) => result.extract::<bool>(py).unwrap_or(true),
@@ -154,7 +155,7 @@ impl Evaluator for PyEvaluator {
     }
 
     fn mc_sample(&self, x: &XReal, phi: Phi, _env: &Env, k: u32) -> (f64, Vec<f64>) {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let vals = x.as_f64_slice();
             let result = self
                 .obj
