@@ -15,6 +15,7 @@ The correct backend is selected automatically at import time.
 
 ```bash
 cd imads-py
+# if not installed
 pip install maturin
 maturin develop --release
 ```

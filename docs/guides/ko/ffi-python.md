@@ -15,7 +15,8 @@
 
 ```bash
 cd imads-py
-pip install maturin
+# if not installed
+pip install maturin 
 maturin develop --release
 ```
 

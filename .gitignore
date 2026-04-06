@@ -11,3 +11,4 @@ imads-wasm/pkg/
 imads-jni/java/target/
 
 .claude-assets/
+imads-hpo
