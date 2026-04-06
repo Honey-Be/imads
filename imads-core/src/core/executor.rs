@@ -6,6 +6,7 @@ use crate::types::{
 };
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::sync::{
     Arc, Condvar, Mutex,
@@ -635,7 +636,7 @@ pub enum AdaptiveExecutor<
     E: EvalCacheBackend + Clone + 'static,
     D: DecisionCacheBackend + Clone + 'static,
 > {
-    Inline(InlineExecutor),
+    Inline(InlineExecutor, PhantomData<(E, D)>),
     #[cfg(imads_has_threads)]
     Pool(WorkerPoolExecutor<E, D>),
 }
@@ -644,7 +645,7 @@ impl<E: EvalCacheBackend + Clone + 'static, D: DecisionCacheBackend + Clone + 's
     for AdaptiveExecutor<E, D>
 {
     fn default() -> Self {
-        Self::Inline(InlineExecutor)
+        Self::Inline(InlineExecutor, PhantomData)
     }
 }
 
@@ -653,7 +654,7 @@ impl<E: EvalCacheBackend + Clone + 'static, D: DecisionCacheBackend + Clone + 's
 {
     fn clone(&self) -> Self {
         match self {
-            Self::Inline(i) => Self::Inline(i.clone()),
+            Self::Inline(i, _) => Self::Inline(i.clone(), PhantomData),
             #[cfg(imads_has_threads)]
             Self::Pool(p) => Self::Pool(p.clone()),
         }
@@ -665,33 +666,33 @@ impl<E: EvalCacheBackend + Clone + 'static, D: DecisionCacheBackend + Clone + 's
 {
     fn run_batch(&self, items: Vec<WorkItem>, ctx: Arc<ExecCtx<E, D>>) -> Vec<WorkOutcome> {
         match self {
-            Self::Inline(i) => i.run_batch(items, ctx),
+            Self::Inline(i, _) => i.run_batch(items, ctx),
             #[cfg(imads_has_threads)]
             Self::Pool(p) => p.run_batch(items, ctx),
         }
     }
 
-    fn configure(&mut self, workers: usize) {
+    fn configure(&mut self, _workers: usize) {
         #[cfg(imads_has_threads)]
-        if workers > 1 {
+        if _workers > 1 {
             match self {
-                Self::Pool(p) => p.configure(workers),
-                Self::Inline(_) => *self = Self::Pool(WorkerPoolExecutor::new(workers)),
+                Self::Pool(p) => p.configure(_workers),
+                Self::Inline(..) => *self = Self::Pool(WorkerPoolExecutor::new(_workers)),
             }
             return;
         }
 
         // workers <= 1 or no thread support: use inline.
-        if !matches!(self, Self::Inline(_)) {
-            *self = Self::Inline(InlineExecutor);
+        if !matches!(self, Self::Inline(..)) {
+            *self = Self::Inline(InlineExecutor, PhantomData);
         }
     }
 
-    fn configure_params(&mut self, params: ExecutorParams) {
+    fn configure_params(&mut self, _params: ExecutorParams) {
         match self {
-            Self::Inline(_) => {}
+            Self::Inline(..) => {}
             #[cfg(imads_has_threads)]
-            Self::Pool(p) => p.configure_params(params),
+            Self::Pool(p) => p.configure_params(_params),
         }
     }
 }

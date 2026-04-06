@@ -1,0 +1,3 @@
+headers = imads.h
+headerFilter = imads.h
+linkerOpts.linux = -L../../target/release -limads_ffi
