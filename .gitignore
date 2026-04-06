@@ -9,3 +9,5 @@ imads-wasm/pkg/
 
 # JNI Java compiled classes
 imads-jni/java/target/
+
+.claude-assets/

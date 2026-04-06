@@ -83,7 +83,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "imads-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bitflags",
  "rand",
@@ -92,14 +92,14 @@ dependencies = [
 
 [[package]]
 name = "imads-ffi"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "imads-core",
 ]
 
 [[package]]
 name = "imads-jni"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "imads-core",
  "jni",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "imads-py"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "imads-core",
  "pyo3",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "imads-wasm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "imads-core",
  "js-sys",
