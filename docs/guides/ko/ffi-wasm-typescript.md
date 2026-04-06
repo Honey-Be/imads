@@ -131,7 +131,11 @@ function cheapConstraints(x: Float64Array): boolean {
     return true;
 }
 
-const output = engine.runWithEvaluator(cfg, env, mcSample, 2, cheapConstraints);
+function searchDim(): number | undefined {
+    return 3;  // undefined를 반환하면 엔진이 config 또는 incumbent에서 추론합니다
+}
+
+const output = engine.runWithEvaluator(cfg, env, mcSample, 2, cheapConstraints, searchDim);
 ```
 
 ## WASI용 빌드 (스레드 지원)

@@ -33,6 +33,10 @@ object ImadsPlatform extends ImadsPlatformOps:
         evaluator.mcSample(x, tau, smc, k)
       override def cheapConstraints(x: Array[Double]): Boolean =
         evaluator.cheapConstraints(x)
+      override def searchDim(): Integer =
+        evaluator.searchDim match
+          case Some(d) => Integer.valueOf(d)
+          case None    => null
     val packed = JNI.engineRunWithEvaluator(
       engine, cfg,
       env.runId, env.configHash, env.dataSnapshotId, env.rngMasterSeed,

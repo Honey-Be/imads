@@ -65,9 +65,16 @@ class MyEvaluator:
     def cheap_constraints(self, x: list[float]) -> bool:
         return True
 
+    def search_dim(self) -> int:
+        """Optional: return the number of search dimensions.
+        When provided, the engine uses this instead of EngineConfig.search_dim."""
+        return 4
+
 evaluator = MyEvaluator()
 output = engine.run(cfg, env, workers=4, evaluator=evaluator, num_constraints=2)
 ```
+
+> **注意:** `search_dim()` はオプションです。evaluator がこれを提供すると、エンジンは自動的に探索空間の次元数を検出します。省略した場合、エンジンは `EngineConfig.search_dim`（設定されている場合）または incumbent の長さにフォールバックします。プリセットはデフォルトで `search_dim=None` であり、evaluator からの提供を期待します。
 
 ## Architecture
 

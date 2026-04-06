@@ -169,6 +169,15 @@ impl Evaluator for PyEvaluator {
     fn num_constraints(&self) -> usize {
         self.m
     }
+
+    fn search_dim(&self) -> Option<usize> {
+        Python::attach(|py| {
+            match self.obj.call_method(py, "search_dim", (), None) {
+                Ok(result) => result.extract::<usize>(py).ok(),
+                Err(_) => None,
+            }
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

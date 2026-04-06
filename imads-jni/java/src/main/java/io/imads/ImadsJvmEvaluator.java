@@ -12,4 +12,10 @@ public interface ImadsJvmEvaluator {
 
     /** Optional cheap constraint gate. Return false to reject. */
     default boolean cheapConstraints(double[] x) { return true; }
+
+    /**
+     * Optional: search space dimension.
+     * Return null to let the engine infer from config or incumbent.
+     */
+    default Integer searchDim() { return null; }
 }

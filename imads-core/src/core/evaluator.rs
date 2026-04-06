@@ -26,6 +26,15 @@ pub trait Evaluator: std::fmt::Debug + Send + Sync {
 
     /// Number of constraints.
     fn num_constraints(&self) -> usize;
+
+    /// Number of continuous search dimensions.
+    ///
+    /// When the engine config's `search_dim` is `None`, the engine queries
+    /// this method to determine the dimensionality of the search space.
+    /// The default returns `None`, meaning "use config or incumbent length".
+    fn search_dim(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// A tiny deterministic toy evaluator used by tests.
@@ -37,6 +46,7 @@ pub trait Evaluator: std::fmt::Debug + Send + Sync {
 #[derive(Clone, Debug, Default)]
 pub struct ToyEvaluator {
     pub m: usize,
+    pub dim: usize,
 }
 
 impl ToyEvaluator {
@@ -109,5 +119,9 @@ impl Evaluator for ToyEvaluator {
 
     fn num_constraints(&self) -> usize {
         self.m
+    }
+
+    fn search_dim(&self) -> Option<usize> {
+        if self.dim > 0 { Some(self.dim) } else { None }
     }
 }

@@ -195,6 +195,10 @@ impl Evaluator for JsEvaluator {
     fn num_constraints(&self) -> usize {
         self.m
     }
+
+    fn search_dim(&self) -> Option<usize> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------

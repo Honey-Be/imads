@@ -72,7 +72,7 @@ fn base() -> EngineConfig {
         1,       // poll_step_mult
         6,       // max_iters
         8,       // candidates_per_iter
-        4,       // search_dim
+        None,    // search_dim (resolved from evaluator)
         Some(8), // max_steps_per_iter
         2,       // num_constraints
         0.0,     // accept_h0

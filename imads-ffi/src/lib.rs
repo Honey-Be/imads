@@ -88,6 +88,9 @@ pub struct ImadsEvaluatorVTable {
     /// Number of constraints.
     pub num_constraints: usize,
 
+    /// Optional: search space dimension. Set to 0 to let the engine infer from config/incumbent.
+    pub search_dim: usize,
+
     /// Opaque user data pointer.
     pub user_data: *mut u8,
 }
@@ -147,6 +150,11 @@ impl Evaluator for FfiEvaluator {
 
     fn num_constraints(&self) -> usize {
         self.vtable.num_constraints
+    }
+
+    fn search_dim(&self) -> Option<usize> {
+        let d = self.vtable.search_dim;
+        if d > 0 { Some(d) } else { None }
     }
 }
 
@@ -283,6 +291,7 @@ pub unsafe extern "C" fn imads_engine_run(
     let env = ffi_env_to_env(unsafe { &*env });
     let evaluator: Arc<dyn Evaluator> = Arc::new(ToyEvaluator {
         m: cfg.num_constraints,
+        dim: cfg.search_dim.unwrap_or(4)
     });
     let out = engine
         .inner

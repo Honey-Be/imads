@@ -67,11 +67,14 @@ ImadsEvaluatorVTable vtable = {
     .cheap_constraints = NULL,  // optional
     .mc_sample = my_mc_sample,
     .num_constraints = 2,
+    .search_dim = 0,        // 0 = config または incumbent から推論
     .user_data = NULL,
 };
 
 ImadsOutput out = imads_engine_run_with_evaluator(engine, cfg, &env, 4, vtable);
 ```
+
+`search_dim` を 0 に設定すると、エンジンが config または incumbent から次元を推論します。
 
 ## スレッド安全性
 

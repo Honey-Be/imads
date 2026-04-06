@@ -14,3 +14,6 @@ trait Evaluator:
 
   /** Optional cheap constraint gate. Return false to reject. */
   def cheapConstraints(x: Array[Double]): Boolean = true
+
+  /** Optional: search space dimension. Return None to let the engine infer. */
+  def searchDim: Option[Int] = None

@@ -65,9 +65,16 @@ class MyEvaluator:
     def cheap_constraints(self, x: list[float]) -> bool:
         return True
 
+    def search_dim(self) -> int:
+        """Optional: return the number of search dimensions.
+        When provided, the engine uses this instead of EngineConfig.search_dim."""
+        return 4
+
 evaluator = MyEvaluator()
 output = engine.run(cfg, env, workers=4, evaluator=evaluator, num_constraints=2)
 ```
+
+> **참고:** `search_dim()`은 선택 사항입니다. evaluator가 이를 제공하면, 엔진이 자동으로 탐색 공간의 차원 수를 파악합니다. 생략하면, 엔진은 `EngineConfig.search_dim`(설정된 경우) 또는 incumbent의 길이를 사용합니다. 프리셋은 이제 기본적으로 `search_dim=None`이며, evaluator가 이를 제공할 것을 기대합니다.
 
 ## 아키텍처
 

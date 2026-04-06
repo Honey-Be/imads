@@ -42,7 +42,7 @@ fn base_cfg() -> EngineConfig {
         1,
         3,
         8,
-        1,
+        Some(1),
         None,
         2,
         0.0,
@@ -563,7 +563,7 @@ fn engine_config_validates_k_params_regression() {
         1,
         2,
         4,
-        2,
+        Some(2),
         Some(4),
         1,
         0.0,
@@ -605,7 +605,7 @@ fn engine_config_validates_k_params_regression() {
         1,
         2,
         4,
-        2,
+        Some(2),
         Some(4),
         1,
         0.0,
@@ -647,7 +647,7 @@ fn engine_config_validates_k_params_regression() {
         1,
         2,
         4,
-        2,
+        Some(2),
         Some(4),
         1,
         0.0,
@@ -781,7 +781,8 @@ fn presets_validate_and_are_distinct() {
 
     for p in Preset::ALL {
         let cfg = p.config();
-        assert!(cfg.search_dim >= 1);
+        // search_dim is now None in presets (resolved from evaluator at runtime)
+        assert!(cfg.search_dim.is_none() || cfg.search_dim.unwrap() >= 1);
         assert!(cfg.mesh_base_step.is_finite() && cfg.mesh_base_step > 0.0);
     }
 }
@@ -1127,7 +1128,7 @@ fn engine_config_validates_objective_pruning_params() {
         1,
         2,
         4,
-        2,
+        Some(2),
         Some(4),
         1,
         0.0,

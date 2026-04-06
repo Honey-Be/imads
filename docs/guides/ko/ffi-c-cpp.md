@@ -67,11 +67,14 @@ ImadsEvaluatorVTable vtable = {
     .cheap_constraints = NULL,  // optional
     .mc_sample = my_mc_sample,
     .num_constraints = 2,
+    .search_dim = 0,        // 0 = config 또는 incumbent에서 추론
     .user_data = NULL,
 };
 
 ImadsOutput out = imads_engine_run_with_evaluator(engine, cfg, &env, 4, vtable);
 ```
+
+`search_dim`을 0으로 설정하면 엔진이 config 또는 incumbent에서 차원을 추론합니다.
 
 ## 스레드 안전성
 

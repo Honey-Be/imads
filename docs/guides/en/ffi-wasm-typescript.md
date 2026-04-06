@@ -131,7 +131,11 @@ function cheapConstraints(x: Float64Array): boolean {
     return true;
 }
 
-const output = engine.runWithEvaluator(cfg, env, mcSample, 2, cheapConstraints);
+function searchDim(): number | undefined {
+    return 3;  // return undefined to let the engine infer from config or incumbent
+}
+
+const output = engine.runWithEvaluator(cfg, env, mcSample, 2, cheapConstraints, searchDim);
 ```
 
 ## Building for WASI (with threads)

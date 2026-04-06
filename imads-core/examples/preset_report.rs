@@ -45,6 +45,7 @@ fn main() {
         let cfg = preset.config();
         let evaluator = Arc::new(ToyEvaluator {
             m: cfg.num_constraints,
+            dim: cfg.search_dim.unwrap_or(4),
         });
         let mut engine = Engine::<DefaultBundle>::default();
         let t0 = Instant::now();

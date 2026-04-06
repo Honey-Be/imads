@@ -31,6 +31,20 @@
 スレッドサポートのない WASM ターゲットでは、`InlineExecutor` のみが利用可能です。
 `wasm32-wasip1-threads` および `wasm32-wasip3` では、プール版が有効になります。
 
+### Evaluator トレイト
+
+`Evaluator` トレイトはブラックボックスインターフェースを定義します:
+
+| メソッド | 必須 | 説明 |
+|--------|----------|-------------|
+| `mc_sample(x, phi, env, k)` | はい | 目的関数＋制約の決定論的 MC サンプル |
+| `cheap_constraints(x, env)` | いいえ | 高速棄却ゲート（デフォルト: すべて受理） |
+| `solver_bias(x, tau, env)` | いいえ | Tau 依存バイアス項（デフォルト: ゼロ） |
+| `num_constraints()` | はい | 制約値の数 |
+| `search_dim()` | いいえ | 探索空間の次元; `Some(d)` の場合、`EngineConfig.search_dim` をオーバーライド |
+
+エンジンは次元を以下の優先順位で解決します: `config.search_dim` > `evaluator.search_dim()` > 現在の解の長さ > フォールバック 1。
+
 ## 三段階判定フロー
 
 1. **ステージ A（低コスト）** — `Evaluator::cheap_constraints()`。ブラックボックス評価なしで棄却します。

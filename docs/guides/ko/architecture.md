@@ -31,6 +31,20 @@
 스레드를 지원하지 않는 WASM 타겟에서는 `InlineExecutor`만 사용 가능합니다.
 `wasm32-wasip1-threads` 및 `wasm32-wasip3`에서는 풀 변형이 활성화됩니다.
 
+### Evaluator 트레이트
+
+`Evaluator` 트레이트는 블랙박스 인터페이스를 정의합니다:
+
+| 메서드 | 필수 여부 | 설명 |
+|--------|----------|-------------|
+| `mc_sample(x, phi, env, k)` | 예 | 목적 함수 + 제약 조건의 결정론적 MC 샘플 |
+| `cheap_constraints(x, env)` | 아니요 | 빠른 거부 게이트 (기본값: 모두 수락) |
+| `solver_bias(x, tau, env)` | 아니요 | Tau 의존 편향 항 (기본값: 0) |
+| `num_constraints()` | 예 | 제약 조건 값의 수 |
+| `search_dim()` | 아니요 | 탐색 공간 차원; `Some(d)`일 때 `EngineConfig.search_dim`을 오버라이드 |
+
+엔진은 차원을 다음 순서로 결정합니다: `config.search_dim` > `evaluator.search_dim()` > 현재 해의 길이 > 폴백 값 1.
+
 ## 3단계 의사결정 흐름
 
 1. **Stage A (저비용)** — `Evaluator::cheap_constraints()`. 블랙박스 평가 없이 거부합니다.

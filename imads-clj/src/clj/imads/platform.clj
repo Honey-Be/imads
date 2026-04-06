@@ -41,14 +41,20 @@
                  (int workers))]
     (unpack-output packed)))
 
-(defn engine-run-with-evaluator [engine cfg env-data mc-sample-fn num-constraints cheap-fn workers]
+(defn engine-run-with-evaluator
+  ([engine cfg env-data mc-sample-fn num-constraints cheap-fn workers]
+   (engine-run-with-evaluator engine cfg env-data mc-sample-fn num-constraints cheap-fn nil workers))
+  ([engine cfg env-data mc-sample-fn num-constraints cheap-fn search-dim-val workers]
   (let [evaluator (reify ImadsJvmEvaluator
                     (mcSample [_ x tau smc k]
                       (mc-sample-fn (vec x) tau smc k))
                     (cheapConstraints [_ x]
                       (if cheap-fn
                         (boolean (cheap-fn (vec x)))
-                        true)))
+                        true))
+                    (searchDim [_]
+                      (when search-dim-val
+                        (Integer/valueOf (int search-dim-val)))))
         packed (ImadsNative/engineRunWithEvaluator
                  engine cfg
                  (long (:run-id env-data))
@@ -58,4 +64,4 @@
                  (int workers)
                  evaluator
                  (int num-constraints))]
-    (unpack-output packed)))
+    (unpack-output packed))))

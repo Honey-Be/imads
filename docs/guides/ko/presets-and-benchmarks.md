@@ -7,6 +7,8 @@
 - `conservative`: false infeasible 위험이 가장 중요할 때 더 안전하고 신중한 프리셋
 - `throughput`: 품질 우선 프리셋; 더 빠른 적응을 위해 더 많은 partial-step 예산을 사용합니다
 
+> **참고:** 모든 프리셋은 이제 `search_dim`을 `None`으로 설정합니다. 엔진은 런타임에 evaluator의 `search_dim()` 메서드를 조회하여 탐색 공간의 차원을 결정합니다.
+
 ## 권장 사용법
 
 다음과 같은 목적에 따라 프리셋을 사용하십시오:

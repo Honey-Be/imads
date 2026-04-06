@@ -67,11 +67,14 @@ ImadsEvaluatorVTable vtable = {
     .cheap_constraints = NULL,  // optional
     .mc_sample = my_mc_sample,
     .num_constraints = 2,
+    .search_dim = 0,        // 0 = aus Config oder Incumbent ableiten
     .user_data = NULL,
 };
 
 ImadsOutput out = imads_engine_run_with_evaluator(engine, cfg, &env, 4, vtable);
 ```
+
+Setzen Sie `search_dim` auf 0, damit die Engine die Dimension aus der Config oder dem Incumbent ableitet.
 
 ## Thread Safety
 

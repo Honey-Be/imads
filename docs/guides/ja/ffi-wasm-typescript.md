@@ -131,7 +131,11 @@ function cheapConstraints(x: Float64Array): boolean {
     return true;
 }
 
-const output = engine.runWithEvaluator(cfg, env, mcSample, 2, cheapConstraints);
+function searchDim(): number | undefined {
+    return 3;  // undefined を返すと、エンジンが config または incumbent から推論します
+}
+
+const output = engine.runWithEvaluator(cfg, env, mcSample, 2, cheapConstraints, searchDim);
 ```
 
 ## WASI 向けビルド（スレッド対応）

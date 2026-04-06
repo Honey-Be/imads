@@ -105,6 +105,27 @@ impl Evaluator for JavaEvaluator {
     fn num_constraints(&self) -> usize {
         self.m
     }
+
+    fn search_dim(&self) -> Option<usize> {
+        let mut env = match self.jvm.attach_current_thread() {
+            Ok(env) => env,
+            Err(_) => return None,
+        };
+        match env.call_method(&self.evaluator_ref, "searchDim", "()Ljava/lang/Integer;", &[]) {
+            Ok(v) => {
+                let obj = v.l().ok()?;
+                if obj.is_null() {
+                    None
+                } else {
+                    env.call_method(&obj, "intValue", "()I", &[])
+                        .ok()
+                        .and_then(|v| v.i().ok())
+                        .map(|i| i.max(0) as usize)
+                }
+            }
+            Err(_) => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +258,7 @@ pub extern "system" fn Java_io_imads_ImadsNative_engineRun(
     };
     let evaluator: Arc<dyn Evaluator> = Arc::new(ToyEvaluator {
         m: cfg.num_constraints,
+        dim: cfg.search_dim.unwrap_or(4)
     });
     let out = engine.run_with_evaluator(cfg, &env_val, workers.max(1) as usize, evaluator);
 

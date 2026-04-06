@@ -65,9 +65,16 @@ class MyEvaluator:
     def cheap_constraints(self, x: list[float]) -> bool:
         return True
 
+    def search_dim(self) -> int:
+        """Optional: return the number of search dimensions.
+        When provided, the engine uses this instead of EngineConfig.search_dim."""
+        return 4
+
 evaluator = MyEvaluator()
 output = engine.run(cfg, env, workers=4, evaluator=evaluator, num_constraints=2)
 ```
+
+> **Hinweis:** `search_dim()` ist optional. Wenn der Evaluator es bereitstellt, erkennt die Engine die Suchraum-Dimensionalität automatisch. Wenn weggelassen, greift die Engine auf `EngineConfig.search_dim` (falls gesetzt) oder die Länge des Incumbents zurück. Presets verwenden jetzt standardmäßig `search_dim=None` und erwarten, dass der Evaluator dies bereitstellt.
 
 ## Architektur
 

@@ -32,6 +32,20 @@ Policy-Oberfläche. Jeder Policy-Slot ist ein assoziierter Typ auf `PolicyBundle
 Auf WASM-Zielen ohne Thread-Unterstützung ist nur `InlineExecutor` verfügbar.
 Auf `wasm32-wasip1-threads` und `wasm32-wasip3` ist die Pool-Variante aktiviert.
 
+### Evaluator-Trait
+
+Der `Evaluator`-Trait definiert die Black-Box-Schnittstelle:
+
+| Methode | Erforderlich | Beschreibung |
+|--------|----------|-------------|
+| `mc_sample(x, phi, env, k)` | Ja | Deterministische MC-Stichprobe von Zielfunktion + Constraints |
+| `cheap_constraints(x, env)` | Nein | Schnelles Ablehnungsgate (Standard: alle akzeptieren) |
+| `solver_bias(x, tau, env)` | Nein | Tau-abhaengiger Bias-Term (Standard: Null) |
+| `num_constraints()` | Ja | Anzahl der Constraint-Werte |
+| `search_dim()` | Nein | Suchraum-Dimension; bei `Some(d)` wird `EngineConfig.search_dim` ueberschrieben |
+
+Die Engine loest die Dimension wie folgt auf: `config.search_dim` > `evaluator.search_dim()` > Laenge des aktuellen Kandidaten > Fallback 1.
+
 ## Dreistufiger Entscheidungsfluss
 
 1. **Stufe A (günstig)** — `Evaluator::cheap_constraints()`. Ablehnung ohne Black-Box-Auswertung.

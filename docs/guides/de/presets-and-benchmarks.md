@@ -7,6 +7,8 @@ Dieses Projekt liefert derzeit fünf Presets in `src/presets.rs` mit:
 - `conservative`: sicherer / vorsichtiger, wenn das Risiko falsch-negativer Infeasible-Bewertungen am wichtigsten ist
 - `throughput`: qualitätsorientiertes Preset; gibt mehr partial-step-Budget aus, um eine schnellere Anpassung zu erreichen
 
+> **Hinweis:** Alle Presets setzen `search_dim` jetzt auf `None`. Die Engine fragt zur Laufzeit die `search_dim()`-Methode des Evaluators ab, um die Dimensionalitaet des Suchraums zu bestimmen.
+
 ## Empfohlene Verwendung
 
 Verwenden Sie die Presets mit folgender Absicht:

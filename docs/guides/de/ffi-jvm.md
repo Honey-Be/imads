@@ -67,6 +67,7 @@ val evaluator = object : ImadsEvaluator {
         val f = x.sumOf { it * it }
         return doubleArrayOf(f, x.sum() - 1.0, x.sum() - 2.0)
     }
+    override fun searchDim(): Int? = null  // None = aus Config oder Incumbent ableiten
 }
 imadsRun(evaluator = evaluator, numConstraints = 2, workers = 4) { println(it) }
 ```
@@ -107,6 +108,7 @@ val eval = new Evaluator:
   def mcSample(x: Array[Double], tau: Long, smc: Int, k: Int): Array[Double] =
     val f = x.map(xi => xi * xi).sum
     Array(f, x.sum - 1, x.sum - 2)
+  def searchDim: Option[Int] = None  // None = aus Config oder Incumbent ableiten
 
 Imads.run("balanced", evaluator = Some((eval, 2)), workers = 4) { output =>
   println(s"f_best = ${output.fBest}")
@@ -162,7 +164,8 @@ Projekt: `imads-clj/`
                                      (let [f (reduce + (map #(* % %) x))]
                                        #?(:clj  (double-array [f 0.0 0.0])
                                           :cljs (clj->js [f 0.0 0.0]))))
-                        :num-constraints 2}})
+                        :num-constraints 2
+                        :search-dim nil}})
 ```
 
 ### Verzeichnisstruktur

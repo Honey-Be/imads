@@ -86,6 +86,10 @@ typedef struct ImadsEvaluatorVTable {
    */
   uintptr_t num_constraints;
   /**
+   * Search space dimension. Set to 0 to let the engine infer from config/incumbent.
+   */
+  uintptr_t search_dim;
+  /**
    * Opaque user data pointer.
    */
   uint8_t *user_data;

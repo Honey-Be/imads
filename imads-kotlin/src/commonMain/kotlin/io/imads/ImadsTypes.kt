@@ -53,4 +53,7 @@ interface ImadsEvaluator {
 
     /** Optional cheap constraint gate. Return false to reject without evaluation. */
     fun cheapConstraints(x: DoubleArray): Boolean = true
+
+    /** Optional: search space dimension. Return null to let the engine infer. */
+    fun searchDim(): Int? = null
 }

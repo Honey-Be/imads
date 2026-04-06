@@ -32,6 +32,20 @@ policy surface. Each policy slot is an associated type on `PolicyBundle`:
 On WASM targets without thread support, only `InlineExecutor` is available.
 On `wasm32-wasip1-threads` and `wasm32-wasip3`, the pool variant is enabled.
 
+### Evaluator Trait
+
+The `Evaluator` trait defines the black-box interface:
+
+| Method | Required | Description |
+|--------|----------|-------------|
+| `mc_sample(x, phi, env, k)` | Yes | Deterministic MC sample of objective + constraints |
+| `cheap_constraints(x, env)` | No | Fast rejection gate (default: accept all) |
+| `solver_bias(x, tau, env)` | No | Tau-dependent bias term (default: zero) |
+| `num_constraints()` | Yes | Number of constraint values |
+| `search_dim()` | No | Search space dimension; when `Some(d)`, overrides `EngineConfig.search_dim` |
+
+The engine resolves dimension as: `config.search_dim` > `evaluator.search_dim()` > incumbent length > fallback 1.
+
 ## Three-Stage Decision Flow
 
 1. **Stage A (Cheap)** — `Evaluator::cheap_constraints()`. Reject without black-box evaluation.

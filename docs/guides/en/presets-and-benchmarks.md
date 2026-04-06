@@ -7,6 +7,8 @@ This project currently ships five presets in `src/presets.rs`:
 - `conservative`: safer / more cautious when false infeasible risk matters most
 - `throughput`: quality-first preset; spends more partial-step budget for faster adaptation
 
+> **Note:** All presets now set `search_dim` to `None`. The engine queries the evaluator's `search_dim()` method at runtime to determine the search space dimensionality.
+
 ## Recommended usage
 
 Use the presets with the following intent:

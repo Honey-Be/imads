@@ -36,7 +36,10 @@ pub struct EngineConfig {
     pub max_iters: u64,
     pub candidates_per_iter: usize,
     /// Search space dimension (length of x in continuous space).
-    pub search_dim: usize,
+    ///
+    /// When `None`, the engine obtains the dimension from the evaluator's
+    /// `search_dim()` method or from the incumbent's length.
+    pub search_dim: Option<usize>,
     /// Maximum number of one-step work items executed per engine iteration.
     ///
     /// - `None`: drain all Ready candidates each iteration (v3 behavior).
@@ -136,7 +139,7 @@ impl EngineConfig {
         poll_step_mult: i64,
         max_iters: u64,
         candidates_per_iter: usize,
-        search_dim: usize,
+        search_dim: Option<usize>,
         max_steps_per_iter: Option<usize>,
         num_constraints: usize,
         accept_h0: f64,
@@ -239,7 +242,7 @@ impl EngineConfig {
         if poll_step_mult < 1 {
             err |= ConfigError::PollStepMult;
         }
-        if search_dim < 1 {
+        if search_dim == Some(0) {
             err |= ConfigError::SearchDim;
         }
         if !(executor_chunk_min..=executor_chunk_max).contains(&executor_chunk_base) {
@@ -296,21 +299,21 @@ impl EngineConfig {
 // Ladder defaults / automation
 // ----------------------------
 
-fn default_tau_levels(cfg: &EngineConfig) -> Vec<Tau> {
+fn default_tau_levels(dim: usize) -> Vec<Tau> {
     // Heuristic: 3-level tau ladder (loose -> tight).
     // Larger tau => looser solver tolerance (higher bias but (usually) cheaper).
     // For higher-dimensional problems, we add one extra very-loose level to improve screening.
-    if cfg.search_dim >= 64 {
+    if dim >= 64 {
         vec![Tau(1000), Tau(100), Tau(10), Tau(1)]
     } else {
         vec![Tau(100), Tau(10), Tau(1)]
     }
 }
 
-fn default_smc_levels(cfg: &EngineConfig) -> Vec<Smc> {
+fn default_smc_levels(dim: usize) -> Vec<Smc> {
     // Heuristic: 3-level MC ladder (low -> high).
     // Scale up the base sample count with dimension to keep estimator variance in check.
-    let d = cfg.search_dim.max(1);
+    let d = dim.max(1);
     let base: u32 = if d <= 8 {
         8
     } else if d <= 32 {
@@ -403,14 +406,14 @@ fn paired_audit_sample_from_estimates(
     }
 }
 
-fn resolve_ladder_levels(cfg: &EngineConfig) -> (Vec<Tau>, Vec<Smc>) {
+fn resolve_ladder_levels(cfg: &EngineConfig, dim: usize) -> (Vec<Tau>, Vec<Smc>) {
     let mut tau = if cfg.tau_levels.is_empty() {
-        default_tau_levels(cfg)
+        default_tau_levels(dim)
     } else {
         cfg.tau_levels.clone()
     };
     let mut smc = if cfg.smc_levels.is_empty() {
-        default_smc_levels(cfg)
+        default_smc_levels(dim)
     } else {
         cfg.smc_levels.clone()
     };
@@ -524,6 +527,7 @@ impl<P: PolicyBundle> Engine<P> {
     pub fn run(&mut self, cfg: &EngineConfig, env: &Env, workers: usize) -> EngineOutput {
         let evaluator: Arc<dyn Evaluator> = Arc::new(ToyEvaluator {
             m: cfg.num_constraints,
+            dim: cfg.search_dim.unwrap_or(4),
         });
         self.run_with_evaluator(cfg, env, workers, evaluator)
     }
@@ -566,7 +570,13 @@ impl<P: PolicyBundle> Engine<P> {
             k_eta: cfg.calibrator_k_eta,
         });
 
-        let (tau_levels, smc_levels) = resolve_ladder_levels(cfg);
+        // Resolve search dimension: config override > evaluator > fallback 1.
+        let resolved_dim: usize = cfg
+            .search_dim
+            .or_else(|| evaluator.search_dim())
+            .unwrap_or(1);
+
+        let (tau_levels, smc_levels) = resolve_ladder_levels(cfg, resolved_dim);
         let ladder = self.ladder.build_ladder(&tau_levels, &smc_levels);
         let ladder_len = ladder.len();
         assert!(ladder_len > 0, "ladder must be non-empty");
@@ -627,7 +637,7 @@ impl<P: PolicyBundle> Engine<P> {
             let dim: usize = if let Some(xb) = x_best.as_ref() {
                 xb.0.len()
             } else {
-                cfg.search_dim.max(1)
+                resolved_dim
             };
             let incumbent_x: Option<Vec<f64>> = x_best
                 .as_ref()

@@ -19,6 +19,7 @@ fn run_once(preset: Preset, workers: usize) -> (Duration, imads_core::core::engi
     let env = bench_env();
     let evaluator = Arc::new(ToyEvaluator {
         m: cfg.num_constraints,
+        dim: cfg.search_dim.unwrap_or(4)
     });
     let start = Instant::now();
     let mut engine = Engine::<DefaultBundle>::default();
