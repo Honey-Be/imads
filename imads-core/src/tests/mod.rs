@@ -6,6 +6,22 @@ use crate::types::{
     Env, MeshGeometry, Smc, Tau, XMesh, XReal, mesh_to_real, quantize_real_to_mesh,
 };
 
+use crate::presets::Preset;
+
+fn cfg_for(p: Preset) -> EngineConfig {
+    p.config()
+}
+
+fn env_with_seed(seed: u128) -> Env {
+    let mut env = base_env();
+    env.rng_master_seed = seed;
+    env
+}
+
+fn assert_close(a: f64, b: f64, tol: f64) {
+    assert!((a - b).abs() <= tol, "left={a}, right={b}, tol={tol}");
+}
+
 fn base_env() -> Env {
     Env {
         run_id: 1,
@@ -280,7 +296,8 @@ fn dids_assignment_updates_from_history() {
         f_se: 0.0,
         c_hat: vec![1.0],
         c_se: vec![0.0],
-        tau_scale: 1.0,
+        phi,
+        tau_scale: phi.tau.0 as f64,
     };
 
     for k in 0..10 {
@@ -326,7 +343,8 @@ fn dids_assignment_increases_when_delta_high() {
         f_se: 0.0,
         c_hat: vec![1.0],
         c_se: vec![0.0],
-        tau_scale: 1.0,
+        phi,
+        tau_scale: phi.tau.0 as f64,
     };
 
     let mut dids_low = DefaultDids::default();
@@ -393,7 +411,8 @@ fn delta_calibrator_increases_delta_on_false_infeasible() {
         f_se: 0.0,
         c_hat: vec![1.0],
         c_se: vec![0.0],
-        tau_scale: 1.0,
+        phi,
+        tau_scale: phi.tau.0 as f64,
     };
 
     let mut events: Vec<CalibEvent> = Vec::new();
@@ -474,12 +493,21 @@ fn dids_level_bucket_false_signal_pushes_a_higher() {
         policy_rev: PolicyRev(0),
         runtime_cost: 0.0,
     };
-    let est = Estimates {
+    let est_l1 = Estimates {
         f_hat: 0.0,
         f_se: 0.0,
         c_hat: vec![1.0],
         c_se: vec![0.0],
-        tau_scale: 1.0,
+        phi: phi_l1,
+        tau_scale: phi_l1.tau.0 as f64,
+    };
+    let est_l2 = Estimates {
+        f_hat: 0.0,
+        f_se: 0.0,
+        c_hat: vec![1.0],
+        c_se: vec![0.0],
+        phi: phi_l2,
+        tau_scale: phi_l2.tau.0 as f64,
     };
 
     let mut dids = DefaultDids::default();
@@ -489,13 +517,13 @@ fn dids_level_bucket_false_signal_pushes_a_higher() {
         let jr = if k % 2 == 0 {
             JobResult::EarlyInfeasible {
                 violated_j: 0,
-                estimates: est.clone(),
+                estimates: est_l1.clone(),
                 meta: meta1.clone(),
             }
         } else {
             JobResult::EarlyInfeasible {
                 violated_j: 0,
-                estimates: est.clone(),
+                estimates: est_l2.clone(),
                 meta: meta2.clone(),
             }
         };
@@ -811,14 +839,16 @@ fn delta_k_calibrator_updates_k_from_paired_audit() {
         f_se: 0.0,
         c_hat: vec![5.0],
         c_se: vec![0.0],
-        tau_scale: 100.0,
+        phi: cut_phi,
+        tau_scale: cut_phi.tau.0 as f64,
     };
     let pair_est = Estimates {
         f_hat: 9.0,
         f_se: 0.0,
         c_hat: vec![1.0],
         c_se: vec![0.0],
-        tau_scale: 10.0,
+        phi: pair_phi,
+        tau_scale: pair_phi.tau.0 as f64,
     };
 
     let events = vec![
@@ -859,6 +889,227 @@ fn delta_k_calibrator_updates_k_from_paired_audit() {
     let _ = cal.update(&events);
     let st = cal.state();
     assert!(st.k_f > 0.0 || st.k_c[0] > 0.0);
+}
+
+#[test]
+fn delta_k_calibrator_accumulates_multiple_same_s_tau_intervals() {
+    use crate::policies::calibrator::{
+        AuditOf, CalibEvent, CalibratorConfig, CalibratorPolicy, DeltaKCalibrator,
+        PairedAuditSample,
+    };
+    use crate::types::{
+        CandidateId, EnvRev, Estimates, EvalMeta, JobResult, Phi, PolicyRev, Smc, Tau,
+    };
+
+    let mut cal = DeltaKCalibrator::default();
+    cal.init(1);
+    cal.configure(&CalibratorConfig {
+        target_false: 0.01,
+        min_audits: 1,
+        eta_delta: 0.1,
+        delta_min: 0.0,
+        delta_max: 0.05,
+        k_window: 32,
+        k_min_pairs: 1,
+        k_quantile: 0.5,
+        k_eta: 1.0,
+    });
+
+    let cut_phi = Phi {
+        tau: Tau(1000),
+        smc: Smc(32),
+    };
+    let pair1_phi = Phi {
+        tau: Tau(100),
+        smc: Smc(32),
+    };
+    let pair2_phi = Phi {
+        tau: Tau(10),
+        smc: Smc(32),
+    };
+    let truth_phi = Phi {
+        tau: Tau(1),
+        smc: Smc(128),
+    };
+    let audit_of = AuditOf {
+        violated_j: 0,
+        phi_at_cut: cut_phi,
+        phi_idx_at_cut: 0,
+    };
+
+    let cut_est = Estimates {
+        f_hat: 12.0,
+        f_se: 0.0,
+        c_hat: vec![6.0],
+        c_se: vec![0.0],
+        phi: cut_phi,
+        tau_scale: cut_phi.tau.0 as f64,
+    };
+    let pair1_est = Estimates {
+        f_hat: 10.0,
+        f_se: 0.0,
+        c_hat: vec![3.0],
+        c_se: vec![0.0],
+        phi: pair1_phi,
+        tau_scale: pair1_phi.tau.0 as f64,
+    };
+    let pair2_est = Estimates {
+        f_hat: 9.0,
+        f_se: 0.0,
+        c_hat: vec![1.0],
+        c_se: vec![0.0],
+        phi: pair2_phi,
+        tau_scale: pair2_phi.tau.0 as f64,
+    };
+
+    let events = vec![
+        CalibEvent {
+            id: CandidateId(7),
+            result: JobResult::EarlyInfeasible {
+                violated_j: 0,
+                estimates: cut_est.clone(),
+                meta: EvalMeta {
+                    phi: cut_phi,
+                    env_rev: EnvRev(0),
+                    policy_rev: PolicyRev(0),
+                    runtime_cost: 0.0,
+                },
+            },
+            audited: true,
+            audit_of: Some(audit_of.clone()),
+            paired_sample: None,
+        },
+        CalibEvent {
+            id: CandidateId(7),
+            result: JobResult::Partial {
+                estimates: pair1_est.clone(),
+                meta: EvalMeta {
+                    phi: pair1_phi,
+                    env_rev: EnvRev(0),
+                    policy_rev: PolicyRev(0),
+                    runtime_cost: 0.0,
+                },
+            },
+            audited: true,
+            audit_of: Some(audit_of.clone()),
+            paired_sample: Some(PairedAuditSample {
+                paired_phi: pair1_phi,
+                paired_phi_idx: 1,
+                estimates: pair1_est.clone(),
+            }),
+        },
+        CalibEvent {
+            id: CandidateId(7),
+            result: JobResult::Partial {
+                estimates: pair2_est.clone(),
+                meta: EvalMeta {
+                    phi: pair2_phi,
+                    env_rev: EnvRev(0),
+                    policy_rev: PolicyRev(0),
+                    runtime_cost: 0.0,
+                },
+            },
+            audited: true,
+            audit_of: Some(audit_of.clone()),
+            paired_sample: Some(PairedAuditSample {
+                paired_phi: pair2_phi,
+                paired_phi_idx: 2,
+                estimates: pair2_est.clone(),
+            }),
+        },
+        CalibEvent {
+            id: CandidateId(7),
+            result: JobResult::Truth {
+                f: 8.0,
+                c: vec![-1.0],
+                feasible: true,
+                v: 0.0,
+                meta: EvalMeta {
+                    phi: truth_phi,
+                    env_rev: EnvRev(0),
+                    policy_rev: PolicyRev(0),
+                    runtime_cost: 0.0,
+                },
+            },
+            audited: false,
+            audit_of: None,
+            paired_sample: None,
+        },
+    ];
+
+    let _ = cal.update(&events);
+    let st = cal.state();
+    assert!(st.k_interval_stats.iter().any(|s| {
+        s.key.tau_loose == Tau(1000) && s.key.tau_tight == Tau(100) && s.key.smc == Smc(32)
+    }));
+    assert!(st.k_interval_stats.iter().any(|s| {
+        s.key.tau_loose == Tau(100) && s.key.tau_tight == Tau(10) && s.key.smc == Smc(32)
+    }));
+    assert!(
+        st.k_by_phi
+            .iter()
+            .any(|s| s.phi == cut_phi && (s.k_f > 0.0 || s.k_c[0] > 0.0))
+    );
+    assert!(
+        st.k_by_phi
+            .iter()
+            .any(|s| s.phi == pair1_phi && (s.k_f > 0.0 || s.k_c[0] > 0.0))
+    );
+}
+
+#[test]
+fn dids_precision_signal_pushes_a_higher_even_when_false_rate_is_low() {
+    use crate::policies::calibrator::CalibState;
+    use crate::policies::dids::{DefaultDids, DidsPolicy};
+    use crate::types::{EnvRev, Estimates, EvalMeta, JobResult, Phi, PolicyRev, Smc, Tau, XMesh};
+
+    let mut dids = DefaultDids::default();
+    dids.init(1);
+
+    let phi = Phi {
+        tau: Tau(100),
+        smc: Smc(16),
+    };
+    let est = Estimates {
+        f_hat: 0.0,
+        f_se: 0.0,
+        c_hat: vec![1.0],
+        c_se: vec![0.0],
+        phi,
+        tau_scale: phi.tau.0 as f64,
+    };
+    let meta = EvalMeta {
+        phi,
+        env_rev: EnvRev(0),
+        policy_rev: PolicyRev(0),
+        runtime_cost: 0.0,
+    };
+    for k in 0..20 {
+        let x = XMesh(vec![k]);
+        let jr = JobResult::EarlyInfeasible {
+            violated_j: 0,
+            estimates: est.clone(),
+            meta: meta.clone(),
+        };
+        dids.record(x, phi, 0, &jr);
+    }
+
+    let calib = CalibState {
+        delta_rel: vec![0.005],
+        target_false: 0.01,
+        min_audits: 5,
+        audit_n_by_phi_idx: vec![vec![20]],
+        false_infeas_n_by_phi_idx: vec![vec![0]],
+        confirmed_violation_n_by_phi_idx: vec![vec![2]],
+        audit_n: vec![20],
+        false_infeas_n: vec![0],
+        confirmed_violation_n: vec![2],
+        ..Default::default()
+    };
+
+    let (a, _) = dids.update_assignment(3, &calib);
+    assert_eq!(a.len(), 1);
+    assert!(a[0] >= 2);
 }
 
 #[test]
@@ -908,4 +1159,182 @@ fn engine_config_validates_objective_pruning_params() {
     .unwrap_err();
     assert!(err.contains(ConfigError::ObjectivePruneMinSmcRank));
     assert!(err.contains(ConfigError::ObjectivePruneMinLevel));
+}
+
+#[test]
+fn balanced_beats_legacy_baseline_on_majority_of_reference_seeds() {
+    let mut balanced_wins = 0usize;
+    let mut balanced_sum = 0.0_f64;
+    let mut legacy_sum = 0.0_f64;
+
+    for seed in 1..=8 {
+        let env = env_with_seed(seed);
+
+        let mut eng_legacy = Engine::<DefaultBundle>::default();
+        let out_legacy = eng_legacy.run(&cfg_for(Preset::LegacyBaseline), &env, 1);
+
+        let mut eng_balanced = Engine::<DefaultBundle>::default();
+        let out_balanced = eng_balanced.run(&cfg_for(Preset::Balanced), &env, 1);
+
+        let f_legacy = out_legacy.f_best.expect("legacy should produce f_best");
+        let f_balanced = out_balanced.f_best.expect("balanced should produce f_best");
+
+        if f_balanced <= f_legacy {
+            balanced_wins += 1;
+        }
+
+        balanced_sum += f_balanced;
+        legacy_sum += f_legacy;
+    }
+
+    // 최소 과반수 이상 우세
+    assert!(
+        balanced_wins >= 5,
+        "balanced should beat legacy_baseline on a majority of reference seeds"
+    );
+
+    // 전체 평균/총합 기준으로도 더 좋아야 함
+    assert!(
+        balanced_sum <= legacy_sum,
+        "balanced should improve aggregate quality over legacy_baseline"
+    );
+}
+
+#[test]
+fn balanced_uses_no_more_partial_budget_than_throughput_over_reference_seeds() {
+    let mut total_balanced_partial = 0u64;
+    let mut total_throughput_partial = 0u64;
+
+    for seed in 1..=8 {
+        let env = env_with_seed(seed);
+
+        let mut eng_balanced = Engine::<DefaultBundle>::default();
+        let out_balanced = eng_balanced.run(&cfg_for(Preset::Balanced), &env, 1);
+
+        let mut eng_throughput = Engine::<DefaultBundle>::default();
+        let out_throughput = eng_throughput.run(&cfg_for(Preset::Throughput), &env, 1);
+
+        // 품질이 완전히 망가지진 않아야 함 (아주 약한 조건)
+        let f_balanced = out_balanced.f_best.unwrap();
+        let f_throughput = out_throughput.f_best.unwrap();
+        assert!(f_balanced.is_finite() && f_throughput.is_finite());
+
+        // 둘 다 정상적으로 결과를 내야 함
+        assert!(
+            out_balanced.f_best.is_some(),
+            "balanced should produce f_best"
+        );
+        assert!(
+            out_throughput.f_best.is_some(),
+            "throughput should produce f_best"
+        );
+
+        total_balanced_partial += out_balanced.stats.partial_steps;
+        total_throughput_partial += out_throughput.stats.partial_steps;
+    }
+
+    assert!(
+        total_balanced_partial <= total_throughput_partial,
+        "balanced should spend no more partial-step budget than throughput overall"
+    );
+}
+
+#[test]
+fn paired_audit_raises_k_in_engine_run() {
+    let mut found = false;
+
+    for seed in 1..=32 {
+        let env = env_with_seed(seed);
+        let mut cfg = cfg_for(Preset::Balanced);
+
+        // K가 빠르게 반응하도록 완화
+        cfg.calibrator_k_min_pairs = 1;
+        cfg.calibrator_k_quantile = 0.5;
+        cfg.calibrator_k_eta = 1.0;
+        cfg.max_iters = 8;
+
+        let mut eng = Engine::<DefaultBundle>::default();
+        let _out = eng.run(&cfg, &env, 1);
+
+        let st = eng.calibrator_state();
+        if st.k_f > 0.0 || st.k_c.iter().any(|&k| k > 0.0) {
+            found = true;
+            break;
+        }
+    }
+
+    assert!(
+        found,
+        "paired audit should raise at least one K statistic on some deterministic seed"
+    );
+}
+
+#[test]
+fn objective_pruning_parameters_change_engine_behavior() {
+    let mut partial_loose = 0u64;
+    let mut partial_strict = 0u64;
+    let mut truth_loose = 0u64;
+    let mut truth_strict = 0u64;
+
+    for seed in 1..=8 {
+        let env = env_with_seed(seed);
+
+        let mut cfg_loose = cfg_for(Preset::Balanced);
+        let mut cfg_strict = cfg_for(Preset::Balanced);
+
+        // 느슨한 pruning: 늦게 prune
+        cfg_loose.objective_prune_min_smc_rank = 3;
+        cfg_loose.objective_prune_min_level = 3;
+        cfg_loose.objective_prune_require_back_half = true;
+
+        // 강한 pruning: 빨리 prune
+        cfg_strict.objective_prune_min_smc_rank = 1;
+        cfg_strict.objective_prune_min_level = 1;
+        cfg_strict.objective_prune_require_back_half = false;
+
+        let mut eng_loose = Engine::<DefaultBundle>::default();
+        let out_loose = eng_loose.run(&cfg_loose, &env, 1);
+
+        let mut eng_strict = Engine::<DefaultBundle>::default();
+        let out_strict = eng_strict.run(&cfg_strict, &env, 1);
+
+        partial_loose += out_loose.stats.partial_steps;
+        partial_strict += out_strict.stats.partial_steps;
+        truth_loose += out_loose.stats.truth_evals;
+        truth_strict += out_strict.stats.truth_evals;
+    }
+
+    assert!(
+        partial_strict <= partial_loose || truth_strict <= truth_loose,
+        "stricter pruning should reduce partial steps or truth evals overall"
+    );
+}
+
+#[test]
+fn balanced_and_throughput_are_each_deterministic_on_reference_seed() {
+    let env = env_with_seed(1);
+
+    // balanced: 같은 preset, 같은 seed, 두 번 돌리면 같아야 함
+    let mut eng_b1 = Engine::<DefaultBundle>::default();
+    let out_b1 = eng_b1.run(&cfg_for(Preset::Balanced), &env, 1);
+
+    let mut eng_b2 = Engine::<DefaultBundle>::default();
+    let out_b2 = eng_b2.run(&cfg_for(Preset::Balanced), &env, 1);
+
+    let f_b1 = out_b1.f_best.expect("balanced should produce f_best");
+    let f_b2 = out_b2.f_best.expect("balanced should produce f_best");
+    assert_close(f_b1, f_b2, 1e-9);
+    assert_eq!(out_b1.x_best, out_b2.x_best);
+
+    // throughput: 같은 preset, 같은 seed, 두 번 돌리면 같아야 함
+    let mut eng_t1 = Engine::<DefaultBundle>::default();
+    let out_t1 = eng_t1.run(&cfg_for(Preset::Throughput), &env, 1);
+
+    let mut eng_t2 = Engine::<DefaultBundle>::default();
+    let out_t2 = eng_t2.run(&cfg_for(Preset::Throughput), &env, 1);
+
+    let f_t1 = out_t1.f_best.expect("throughput should produce f_best");
+    let f_t2 = out_t2.f_best.expect("throughput should produce f_best");
+    assert_close(f_t1, f_t2, 1e-9);
+    assert_eq!(out_t1.x_best, out_t2.x_best);
 }

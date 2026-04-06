@@ -3,7 +3,7 @@ use crate::core::acceptance::{
     AcceptanceConfig, AcceptanceEngine, DefaultAcceptance, TruthDecision,
 };
 use crate::core::evaluator::{Evaluator, ToyEvaluator};
-use crate::core::executor::{ExecCtx, Executor, ExecutorParams, InlineExecutor, WorkOutcome};
+use crate::core::executor::{AdaptiveExecutor, ExecCtx, Executor, ExecutorParams, WorkOutcome};
 use crate::core::poll::DefaultPoll;
 use crate::policies::{
     AuditOf, AuditPolicy, CalibEvent, CalibratorConfig, CalibratorPolicy, DidsPolicy, LadderPolicy,
@@ -11,8 +11,8 @@ use crate::policies::{
 };
 use crate::types::{
     CacheTag, CandidateAuditOrigin, CandidateId, CandidateStageState, CandidateStatus,
-    DecisionCacheKey, Env, EvalMeta, JobResult, MeshGeometry, Phi, PolicyRev, ReadyCandidateView,
-    ReadyKind, Smc, Tau, WorkItem, XMesh, env_rev, mesh_to_real,
+    DecisionCacheKey, Env, Estimates, EvalMeta, JobResult, MeshGeometry, Phi, PolicyRev,
+    ReadyCandidateView, ReadyKind, Smc, Tau, WorkItem, XMesh, env_rev, mesh_to_real,
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -61,7 +61,7 @@ pub struct EngineConfig {
     pub calibrator_k_window: usize,
     /// Minimum number of paired audit samples before K updates are enabled.
     pub calibrator_k_min_pairs: usize,
-    /// Quantile in [0,1] used for conservative K updates.
+    /// Quantile in \[0,1\] used for conservative K updates.
     pub calibrator_k_quantile: f64,
     /// EMA step size for K updates.
     pub calibrator_k_eta: f64,
@@ -323,19 +323,84 @@ fn default_smc_levels(cfg: &EngineConfig) -> Vec<Smc> {
     vec![Smc(base), Smc(mid), Smc(high)]
 }
 
-fn find_paired_phi_idx(ladder: &[Phi], cut_idx: u32) -> Option<u32> {
+fn collect_paired_phi_indices(ladder: &[Phi], cut_idx: u32) -> Vec<u32> {
     let i = cut_idx as usize;
     if i >= ladder.len() {
-        return None;
+        return Vec::new();
     }
     let cur = ladder[i];
-    for (j, ladder_item) in ladder.iter().enumerate().skip(i + 1) {
-        let p = ladder_item;
-        if p.smc == cur.smc && p.tau.0 < cur.tau.0 {
-            return Some(j as u32);
+    ladder
+        .iter()
+        .enumerate()
+        .skip(i + 1)
+        .filter_map(|(j, p)| {
+            if p.smc == cur.smc && p.tau.0 < cur.tau.0 {
+                Some(j as u32)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn is_paired_checkpoint(origin: Option<&CandidateAuditOrigin>, phi_idx: u32) -> bool {
+    origin
+        .map(|o| o.paired_phi_indices.binary_search(&phi_idx).is_ok())
+        .unwrap_or(false)
+}
+
+fn next_audit_target_idx(
+    origin: Option<&CandidateAuditOrigin>,
+    current_idx: u32,
+    ladder_len: usize,
+) -> u32 {
+    if ladder_len == 0 {
+        return 0;
+    }
+    if let Some(origin) = origin {
+        for &idx in origin.paired_phi_indices.iter() {
+            if idx > current_idx {
+                return idx;
+            }
         }
     }
-    None
+    (ladder_len - 1) as u32
+}
+
+fn audit_of_from_origin(origin: &CandidateAuditOrigin) -> AuditOf {
+    AuditOf {
+        violated_j: origin.violated_j,
+        phi_at_cut: origin.phi_at_cut,
+        phi_idx_at_cut: origin.phi_idx_at_cut,
+    }
+}
+
+fn truth_as_estimates(phi: Phi, f: f64, c: &[f64]) -> Estimates {
+    Estimates {
+        f_hat: f,
+        f_se: 0.0,
+        c_hat: c.to_vec(),
+        c_se: vec![0.0; c.len()],
+        phi,
+        tau_scale: phi.tau.0 as f64,
+    }
+}
+
+fn paired_audit_sample_from_estimates(
+    origin: Option<&CandidateAuditOrigin>,
+    phi_idx: u32,
+    phi: Phi,
+    estimates: &Estimates,
+) -> Option<crate::policies::PairedAuditSample> {
+    if is_paired_checkpoint(origin, phi_idx) {
+        Some(crate::policies::PairedAuditSample {
+            paired_phi: phi,
+            paired_phi_idx: phi_idx,
+            estimates: estimates.clone(),
+        })
+    } else {
+        None
+    }
 }
 
 fn resolve_ladder_levels(cfg: &EngineConfig) -> (Vec<Tau>, Vec<Smc>) {
@@ -983,27 +1048,134 @@ impl<P: PolicyBundle> Engine<P> {
 
         // If a decision cache hit happened, use it, but still update state coherently.
         if let Some(cached) = &out.cached_decision {
-            // Update local last_estimates when possible.
             match cached {
-                JobResult::Partial { estimates, .. }
-                | JobResult::EarlyInfeasible { estimates, .. } => {
+                JobResult::Partial { estimates, meta } => {
                     cand.last_estimates = Some(estimates.clone());
                     cand.last_estimates_phi_idx = Some(out.item.phi_idx);
+
+                    let audited = cand.audit_required;
+                    let audit_of = cand.audit_origin.as_ref().map(audit_of_from_origin);
+                    let paired_sample = paired_audit_sample_from_estimates(
+                        cand.audit_origin.as_ref(),
+                        out.item.phi_idx,
+                        meta.phi,
+                        estimates,
+                    );
+
+                    self.apply_state_transition_from_result(
+                        cand,
+                        out.item.phi_idx,
+                        cached,
+                        ladder.len(),
+                    );
+
+                    return MaterializedJob {
+                        result: cached.clone(),
+                        audited,
+                        audit_of,
+                        paired_sample,
+                    };
                 }
-                JobResult::Truth { .. }
-                | JobResult::RejectedCheap { .. }
-                | JobResult::RejectedInvalidEval { .. } => {}
+                JobResult::EarlyInfeasible {
+                    violated_j,
+                    estimates,
+                    meta,
+                } => {
+                    cand.last_estimates = Some(estimates.clone());
+                    cand.last_estimates_phi_idx = Some(out.item.phi_idx);
+
+                    let level = (out.item.phi_idx as usize) + 1;
+                    let aj = assignment.get(*violated_j).copied().unwrap_or(ladder.len());
+
+                    if !cand.audit_required && level >= aj {
+                        let audit = self.audit.should_audit(&cand.x, phi, env_rev);
+                        if audit {
+                            cand.audit_required = true;
+                            cand.audit_cut_estimates = Some(estimates.clone());
+                            cand.audit_origin = Some(CandidateAuditOrigin {
+                                violated_j: *violated_j,
+                                phi_at_cut: meta.phi,
+                                phi_idx_at_cut: out.item.phi_idx,
+                                paired_phi_indices: collect_paired_phi_indices(
+                                    ladder,
+                                    out.item.phi_idx,
+                                ),
+                            });
+                        }
+                    }
+
+                    if cand.audit_required {
+                        let audit_of = cand.audit_origin.as_ref().map(audit_of_from_origin);
+                        cand.next_phi_idx = next_audit_target_idx(
+                            cand.audit_origin.as_ref(),
+                            out.item.phi_idx,
+                            ladder.len(),
+                        );
+                        cand.status = CandidateStatus::Ready;
+                        let paired_sample = paired_audit_sample_from_estimates(
+                            cand.audit_origin.as_ref(),
+                            out.item.phi_idx,
+                            meta.phi,
+                            estimates,
+                        );
+                        return MaterializedJob {
+                            result: cached.clone(),
+                            audited: true,
+                            audit_of,
+                            paired_sample,
+                        };
+                    }
+
+                    cand.status = CandidateStatus::DoneEarlyInfeasible {
+                        violated_j: *violated_j,
+                        at_phi_idx: out.item.phi_idx,
+                    };
+                    return MaterializedJob {
+                        result: cached.clone(),
+                        audited: false,
+                        audit_of: None,
+                        paired_sample: None,
+                    };
+                }
+                JobResult::Truth { f, c, meta, .. } => {
+                    cand.status = CandidateStatus::DoneTruth;
+                    let paired_sample =
+                        if is_paired_checkpoint(cand.audit_origin.as_ref(), out.item.phi_idx) {
+                            let est = truth_as_estimates(meta.phi, *f, c);
+                            Some(crate::policies::PairedAuditSample {
+                                paired_phi: meta.phi,
+                                paired_phi_idx: out.item.phi_idx,
+                                estimates: est,
+                            })
+                        } else {
+                            None
+                        };
+                    return MaterializedJob {
+                        result: cached.clone(),
+                        audited: false,
+                        audit_of: None,
+                        paired_sample,
+                    };
+                }
+                JobResult::RejectedCheap { .. } => {
+                    cand.status = CandidateStatus::DoneRejectedCheap;
+                    return MaterializedJob {
+                        result: cached.clone(),
+                        audited: false,
+                        audit_of: None,
+                        paired_sample: None,
+                    };
+                }
+                JobResult::RejectedInvalidEval { .. } => {
+                    cand.status = CandidateStatus::DoneRejectedInvalidEval;
+                    return MaterializedJob {
+                        result: cached.clone(),
+                        audited: false,
+                        audit_of: None,
+                        paired_sample: None,
+                    };
+                }
             }
-
-            // Advance/resume state from cached decision.
-            self.apply_state_transition_from_result(cand, out.item.phi_idx, cached, ladder.len());
-
-            return MaterializedJob {
-                result: cached.clone(),
-                audited: false,
-                audit_of: None,
-                paired_sample: None,
-            };
         }
 
         // Sticky cheap constraints.
@@ -1090,9 +1262,6 @@ impl<P: PolicyBundle> Engine<P> {
                 let aj = assignment.get(j).copied().unwrap_or(ladder.len());
                 let level = (out.item.phi_idx as usize) + 1; // 1-based
                 if level >= aj {
-                    // Determine audit (sticky).
-                    let mut audit_of: Option<AuditOf> = None;
-
                     if !cand.audit_required {
                         let audit = self.audit.should_audit(&cand.x, phi, env_rev);
                         if audit {
@@ -1102,33 +1271,21 @@ impl<P: PolicyBundle> Engine<P> {
                                 violated_j: j,
                                 phi_at_cut: phi,
                                 phi_idx_at_cut: out.item.phi_idx,
-                                paired_phi_idx: find_paired_phi_idx(ladder, out.item.phi_idx),
+                                paired_phi_indices: collect_paired_phi_indices(
+                                    ladder,
+                                    out.item.phi_idx,
+                                ),
                             });
                         }
                     }
 
                     if cand.audit_required {
-                        // Paired audit path:
-                        // 1) If a same-S tighter-tau level exists, run it first.
-                        // 2) Otherwise jump directly to TRUTH.
-                        if let Some(origin) = &cand.audit_origin {
-                            audit_of = Some(AuditOf {
-                                violated_j: origin.violated_j,
-                                phi_at_cut: origin.phi_at_cut,
-                                phi_idx_at_cut: origin.phi_idx_at_cut,
-                            });
-                            if let Some(pidx) = origin.paired_phi_idx {
-                                if out.item.phi_idx < pidx {
-                                    cand.next_phi_idx = pidx;
-                                } else {
-                                    cand.next_phi_idx = (ladder.len() - 1) as u32;
-                                }
-                            } else {
-                                cand.next_phi_idx = (ladder.len() - 1) as u32;
-                            }
-                        } else {
-                            cand.next_phi_idx = (ladder.len() - 1) as u32;
-                        }
+                        let audit_of = cand.audit_origin.as_ref().map(audit_of_from_origin);
+                        cand.next_phi_idx = next_audit_target_idx(
+                            cand.audit_origin.as_ref(),
+                            out.item.phi_idx,
+                            ladder.len(),
+                        );
                         cand.status = CandidateStatus::Ready;
 
                         let jr = JobResult::EarlyInfeasible {
@@ -1149,7 +1306,12 @@ impl<P: PolicyBundle> Engine<P> {
                             result: jr,
                             audited: true,
                             audit_of,
-                            paired_sample: None,
+                            paired_sample: paired_audit_sample_from_estimates(
+                                cand.audit_origin.as_ref(),
+                                out.item.phi_idx,
+                                phi,
+                                &estimates,
+                            ),
                         };
                     }
 
@@ -1217,7 +1379,15 @@ impl<P: PolicyBundle> Engine<P> {
             }
 
             // Continue to next step.
-            cand.next_phi_idx = out.item.phi_idx + 1;
+            if cand.audit_required {
+                cand.next_phi_idx = next_audit_target_idx(
+                    cand.audit_origin.as_ref(),
+                    out.item.phi_idx,
+                    ladder.len(),
+                );
+            } else {
+                cand.next_phi_idx = out.item.phi_idx + 1;
+            }
             cand.status = CandidateStatus::Ready;
 
             let jr = JobResult::Partial {
@@ -1234,9 +1404,14 @@ impl<P: PolicyBundle> Engine<P> {
             self.decision_cache.put(dkey, jr.clone());
             return MaterializedJob {
                 result: jr,
-                audited: false,
-                audit_of: None,
-                paired_sample: None,
+                audited: cand.audit_required,
+                audit_of: cand.audit_origin.as_ref().map(audit_of_from_origin),
+                paired_sample: paired_audit_sample_from_estimates(
+                    cand.audit_origin.as_ref(),
+                    out.item.phi_idx,
+                    phi,
+                    &estimates,
+                ),
             };
         }
 
@@ -1262,19 +1437,12 @@ impl<P: PolicyBundle> Engine<P> {
         };
         self.decision_cache.put(dkey, jr.clone());
 
-        let paired_sample = if let Some(origin) = &cand.audit_origin {
-            if Some(out.item.phi_idx) == origin.paired_phi_idx {
-                Some(crate::policies::PairedAuditSample {
-                    paired_phi: phi,
-                    paired_phi_idx: out.item.phi_idx,
-                    estimates: estimates.clone(),
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let paired_sample = paired_audit_sample_from_estimates(
+            cand.audit_origin.as_ref(),
+            out.item.phi_idx,
+            phi,
+            &estimates,
+        );
 
         MaterializedJob {
             result: jr,
@@ -1299,9 +1467,9 @@ impl<P: PolicyBundle> Engine<P> {
                 cand.status = CandidateStatus::DoneRejectedInvalidEval;
             }
             JobResult::EarlyInfeasible { violated_j, .. } => {
-                // Cached early-infeasible is treated as final unless audit_required is already set.
                 if cand.audit_required {
-                    cand.next_phi_idx = (ladder_len - 1) as u32;
+                    cand.next_phi_idx =
+                        next_audit_target_idx(cand.audit_origin.as_ref(), phi_idx, ladder_len);
                     cand.status = CandidateStatus::Ready;
                 } else {
                     cand.status = CandidateStatus::DoneEarlyInfeasible {
@@ -1311,9 +1479,12 @@ impl<P: PolicyBundle> Engine<P> {
                 }
             }
             JobResult::Partial { .. } => {
-                // Assume it advanced; if it was the last, mark done.
                 if (phi_idx as usize) + 1 >= ladder_len {
                     cand.status = CandidateStatus::DoneTruth;
+                } else if cand.audit_required {
+                    cand.next_phi_idx =
+                        next_audit_target_idx(cand.audit_origin.as_ref(), phi_idx, ladder_len);
+                    cand.status = CandidateStatus::Ready;
                 } else {
                     cand.next_phi_idx = phi_idx + 1;
                     cand.status = CandidateStatus::Ready;
@@ -1325,7 +1496,10 @@ impl<P: PolicyBundle> Engine<P> {
         }
     }
 
-    // NOTE: expensive evaluation lives in `core::executor`.
+    #[allow(unused)]
+    pub(crate) fn calibrator_state(&self) -> crate::policies::CalibState {
+        self.calibrator.state()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1337,6 +1511,10 @@ struct MaterializedJob {
 }
 
 /// Default policy bundle.
+///
+/// Uses [`AdaptiveExecutor`] which automatically selects between inline (single-threaded)
+/// and pooled (multi-threaded) execution based on the `workers` parameter passed to
+/// [`Engine::run`].
 pub struct DefaultBundle;
 
 impl PolicyBundle for DefaultBundle {
@@ -1349,7 +1527,10 @@ impl PolicyBundle for DefaultBundle {
     type Audit = crate::policies::audit::DefaultAudit;
     type EvalCache = crate::backends::cache::MemoryEvalCache;
     type DecisionCache = crate::backends::cache::MemoryDecisionCache;
-    type Executor = InlineExecutor;
+    type Executor = AdaptiveExecutor<
+        crate::backends::cache::MemoryEvalCache,
+        crate::backends::cache::MemoryDecisionCache,
+    >;
 }
 
 impl<P: PolicyBundle> Default for Engine<P>
@@ -1394,7 +1575,10 @@ impl<S: SchedulerPolicy> PolicyBundle for CustomSchedulerBundle<S> {
     type Audit = crate::policies::audit::DefaultAudit;
     type EvalCache = crate::backends::cache::MemoryEvalCache;
     type DecisionCache = crate::backends::cache::MemoryDecisionCache;
-    type Executor = InlineExecutor;
+    type Executor = AdaptiveExecutor<
+        crate::backends::cache::MemoryEvalCache,
+        crate::backends::cache::MemoryDecisionCache,
+    >;
 }
 
 impl<S: SchedulerPolicy + Default> Engine<CustomSchedulerBundle<S>> {
@@ -1409,7 +1593,7 @@ impl<S: SchedulerPolicy + Default> Engine<CustomSchedulerBundle<S>> {
             audit: crate::policies::audit::DefaultAudit::default(),
             eval_cache: crate::backends::cache::MemoryEvalCache::default(),
             decision_cache: crate::backends::cache::MemoryDecisionCache::default(),
-            executor: InlineExecutor,
+            executor: AdaptiveExecutor::default(),
         }
     }
 }

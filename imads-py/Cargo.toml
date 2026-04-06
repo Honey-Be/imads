@@ -1,0 +1,13 @@
+[package]
+name = "imads-py"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "imads"
+crate-type = ["cdylib"]
+
+[dependencies]
+imads-core = { path = "../imads-core" }
+pyo3 = { version = "0.25", features = ["extension-module"] }

@@ -1,12 +1,31 @@
-use crate::policies::calibrator::CalibState;
-use crate::types::Estimates;
+use crate::policies::calibrator::{CalibState, KByPhiState};
+use crate::types::{Estimates, Phi};
 
 #[derive(Clone, Debug)]
 pub struct Thresholds {
     pub delta_rel: Vec<f64>,
     pub k_c: Vec<f64>,
     pub k_f: f64,
+    pub k_by_phi: Vec<KByPhiState>,
     pub eps_f: f64,
+}
+
+impl Thresholds {
+    pub fn k_f_for(&self, phi: Phi) -> f64 {
+        self.k_by_phi
+            .iter()
+            .find(|st| st.phi == phi)
+            .map(|st| st.k_f)
+            .unwrap_or(self.k_f)
+    }
+
+    pub fn k_c_for(&self, phi: Phi, j: usize) -> f64 {
+        self.k_by_phi
+            .iter()
+            .find(|st| st.phi == phi)
+            .and_then(|st| st.k_c.get(j).copied())
+            .unwrap_or_else(|| self.k_c.get(j).copied().unwrap_or(0.0))
+    }
 }
 
 /// Margin policy. Safe to customize.
@@ -30,8 +49,6 @@ pub trait MarginPolicy: Send + Sync {
 pub struct DefaultMargin;
 
 fn z_for(alpha: f64) -> f64 {
-    // Minimal, deterministic approximation.
-    // 0.05 one-sided ≈ 1.645, 0.10 one-sided ≈ 1.282.
     if (alpha - 0.05).abs() < 1e-12 {
         1.645
     } else if (alpha - 0.10).abs() < 1e-12 {
@@ -59,6 +76,7 @@ impl MarginPolicy for DefaultMargin {
             delta_rel: cal.delta_rel.clone(),
             k_c: cal.k_c.clone(),
             k_f: cal.k_f,
+            k_by_phi: cal.k_by_phi.clone(),
             eps_f: cal.eps_f,
         }
     }
@@ -67,7 +85,7 @@ impl MarginPolicy for DefaultMargin {
         let zc = z_for(self.alpha_c());
         for (j, (&c_hat, &c_se)) in est.c_hat.iter().zip(est.c_se.iter()).enumerate() {
             let delta = th.delta_rel.get(j).copied().unwrap_or(0.0);
-            let bias = th.k_c.get(j).copied().unwrap_or(0.0) * est.tau_scale;
+            let bias = th.k_c_for(est.phi, j) * est.tau_scale;
             let lhs = c_hat - zc * c_se - bias;
             if lhs > delta {
                 return Some(j);
@@ -79,8 +97,9 @@ impl MarginPolicy for DefaultMargin {
     fn objective_bounds(&self, est: &Estimates, th: &Thresholds) -> (f64, f64) {
         let z_l = z_for(self.alpha_f());
         let z_u = z_for(self.beta_f());
-        let lcb = est.f_hat - z_l * est.f_se - th.k_f * est.tau_scale;
-        let ucb = est.f_hat + z_u * est.f_se + th.k_f * est.tau_scale;
+        let k_f = th.k_f_for(est.phi);
+        let lcb = est.f_hat - z_l * est.f_se - k_f * est.tau_scale;
+        let ucb = est.f_hat + z_u * est.f_se + k_f * est.tau_scale;
         (lcb, ucb)
     }
 }

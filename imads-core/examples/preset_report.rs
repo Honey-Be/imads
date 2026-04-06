@@ -2,9 +2,9 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
 
-use imads::core::{DefaultBundle, Engine, ToyEvaluator};
-use imads::presets::Preset;
-use imads::types::{Env, XMesh};
+use imads_core::core::{DefaultBundle, Engine, ToyEvaluator};
+use imads_core::presets::Preset;
+use imads_core::types::{Env, XMesh};
 
 fn report_env() -> Env {
     Env {
@@ -33,9 +33,13 @@ fn format_xmesh(x: &XMesh) -> String {
 }
 
 fn main() {
+    let workers: usize = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
     let env = report_env();
     println!(
-        "preset,elapsed_ms,truth_evals,partial_steps,cheap_rejects,invalid_eval_rejects,f_best,x_best"
+        "preset,workers,elapsed_ms,truth_evals,partial_steps,cheap_rejects,invalid_eval_rejects,f_best,x_best"
     );
     for preset in Preset::ALL {
         let cfg = preset.config();
@@ -44,11 +48,12 @@ fn main() {
         });
         let mut engine = Engine::<DefaultBundle>::default();
         let t0 = Instant::now();
-        let out = engine.run_with_evaluator(&cfg, &env, 1, evaluator);
+        let out = engine.run_with_evaluator(&cfg, &env, workers, evaluator);
         let dt = t0.elapsed().as_secs_f64() * 1e3;
         println!(
-            "{},{:.3},{},{},{},{},{},{:?}",
+            "{},{},{:.3},{},{},{},{},{},{:?}",
             preset.name(),
+            workers,
             dt,
             out.stats.truth_evals,
             out.stats.partial_steps,

@@ -15,7 +15,7 @@ pub trait AuditPolicy: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct DefaultAudit {
-    /// Base audit probability in [0,1].
+    /// Base audit probability in \[0,1\].
     pub p_audit: f64,
     /// Deterministic modulus.
     pub modulus: u64,

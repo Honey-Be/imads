@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use imads::core::{DefaultBundle, Engine, ToyEvaluator};
-use imads::presets::Preset;
-use imads::types::Env;
+use imads_core::core::{DefaultBundle, Engine, ToyEvaluator};
+use imads_core::presets::Preset;
+use imads_core::types::Env;
 
 fn bench_env() -> Env {
     Env {
@@ -14,7 +14,7 @@ fn bench_env() -> Env {
     }
 }
 
-fn run_once(preset: Preset, workers: usize) -> (Duration, imads::core::engine::EngineOutput) {
+fn run_once(preset: Preset, workers: usize) -> (Duration, imads_core::core::engine::EngineOutput) {
     let cfg = preset.config();
     let env = bench_env();
     let evaluator = Arc::new(ToyEvaluator {

@@ -1,15 +1,23 @@
+//! Core type definitions for the IMADS framework.
+//!
+//! Includes mesh geometry, fidelity parameters, candidate lifecycle, and evaluation results.
+
 use std::hash::{Hash, Hasher};
 
 use typed_floats::{InvalidNumber, NonNaNFinite};
 
+/// Number of parallel workers for the executor.
 pub type WorkerCount = usize;
 
+/// Unique identifier for a candidate point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CandidateId(pub u64);
 
+/// Mesh coordinates in base-lattice units (integer).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct XMesh(pub Vec<i64>);
 
+/// Continuous-space coordinates guaranteed to be non-NaN and finite.
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub struct XReal(pub(crate) Vec<NonNaNFinite<f64>>);
 
@@ -23,6 +31,16 @@ impl XReal {
             }
         }
         Ok(Self(out))
+    }
+
+    /// Returns the dimension count.
+    pub fn dim(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns the coordinate values as a slice of `f64`.
+    pub fn as_f64_slice(&self) -> Vec<f64> {
+        self.0.iter().map(|v| f64::from(*v)).collect()
     }
 }
 
@@ -132,6 +150,11 @@ pub struct Estimates {
     pub f_se: f64,
     pub c_hat: Vec<f64>,
     pub c_se: Vec<f64>,
+    /// Exact fidelity bucket that produced this estimate.
+    ///
+    /// This intentionally duplicates `EvalMeta::phi` so policies that only receive
+    /// `Estimates` can still use `(tau, S)` bucket information.
+    pub phi: Phi,
     /// Tolerance scale used to model solver-bias terms.
     ///
     /// In the default margin policy, the effective bias bound is `K * tau_scale`.
@@ -209,7 +232,11 @@ pub struct CandidateAuditOrigin {
     pub violated_j: usize,
     pub phi_at_cut: Phi,
     pub phi_idx_at_cut: u32,
-    pub paired_phi_idx: Option<u32>,
+    /// Same-S tighter-tau checkpoints collected along the audit path.
+    ///
+    /// These are stored in ladder order and let the engine/calibrator accumulate
+    /// multiple paired-K samples instead of just a single checkpoint.
+    pub paired_phi_indices: Vec<u32>,
 }
 
 /// Candidate state for resumable, step-wise evaluation.

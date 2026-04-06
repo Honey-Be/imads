@@ -1,0 +1,16 @@
+[package]
+name = "imads-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+bitflags = { version = "2.11.0", features = ["std", "arbitrary"] }
+typed_floats = { version = "1.0.7", features = ["ensure_no_undefined_behavior"] }
+
+[dev-dependencies]
+rand = "0.9"
+
+[[bench]]
+name = "preset_compare"
+harness = false

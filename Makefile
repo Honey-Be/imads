@@ -1,22 +1,22 @@
 test:
-	cargo test
+	cargo test --workspace
 
 clippy: test
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy --workspace --all-targets -- -D warnings
 
 fmt-check: test
-	cargo fmt --check
+	cargo fmt --all --check
 
 fmt: test
-	cargo fmt
+	cargo fmt --all
 
 preset-compare: test
 	mkdir -p reports
-	cargo bench --bench preset_compare > reports/preset_compare.csv
+	cargo bench -p imads-core --bench preset_compare > reports/preset_compare.csv
 
 preset-report: test
 	mkdir -p reports
-	cargo run --release --example preset_report > reports/preset_report.csv
+	cargo run -p imads-core --release --example preset_report > reports/preset_report.csv
 
 clean:
 	rm -rfd reports

@@ -614,6 +614,84 @@ fn compute_estimates(
         f_se,
         c_hat,
         c_se,
+        phi,
         tau_scale: phi.tau.0 as f64,
     })
+}
+
+// ---------------------------------------------------------------------------
+// AdaptiveExecutor — single API for inline / threaded execution
+// ---------------------------------------------------------------------------
+
+/// Executor that automatically dispatches to [`InlineExecutor`] when `workers <= 1`
+/// and to [`WorkerPoolExecutor`] when `workers > 1` (on targets with thread support).
+///
+/// On WASM targets without thread support (`wasm32-unknown-unknown`, `wasm32-emscripten`, etc.)
+/// only the `Inline` variant is available. On native targets and thread-capable WASM targets
+/// (`wasm32-wasip1-threads`, `wasm32-wasip3`), both variants are available and switching
+/// happens automatically via [`Executor::configure`].
+#[derive(Debug)]
+pub enum AdaptiveExecutor<
+    E: EvalCacheBackend + Clone + 'static,
+    D: DecisionCacheBackend + Clone + 'static,
+> {
+    Inline(InlineExecutor),
+    #[cfg(imads_has_threads)]
+    Pool(WorkerPoolExecutor<E, D>),
+}
+
+impl<E: EvalCacheBackend + Clone + 'static, D: DecisionCacheBackend + Clone + 'static> Default
+    for AdaptiveExecutor<E, D>
+{
+    fn default() -> Self {
+        Self::Inline(InlineExecutor)
+    }
+}
+
+impl<E: EvalCacheBackend + Clone + 'static, D: DecisionCacheBackend + Clone + 'static> Clone
+    for AdaptiveExecutor<E, D>
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::Inline(i) => Self::Inline(i.clone()),
+            #[cfg(imads_has_threads)]
+            Self::Pool(p) => Self::Pool(p.clone()),
+        }
+    }
+}
+
+impl<E: EvalCacheBackend + Clone + 'static, D: DecisionCacheBackend + Clone + 'static>
+    Executor<E, D> for AdaptiveExecutor<E, D>
+{
+    fn run_batch(&self, items: Vec<WorkItem>, ctx: Arc<ExecCtx<E, D>>) -> Vec<WorkOutcome> {
+        match self {
+            Self::Inline(i) => i.run_batch(items, ctx),
+            #[cfg(imads_has_threads)]
+            Self::Pool(p) => p.run_batch(items, ctx),
+        }
+    }
+
+    fn configure(&mut self, workers: usize) {
+        #[cfg(imads_has_threads)]
+        if workers > 1 {
+            match self {
+                Self::Pool(p) => p.configure(workers),
+                Self::Inline(_) => *self = Self::Pool(WorkerPoolExecutor::new(workers)),
+            }
+            return;
+        }
+
+        // workers <= 1 or no thread support: use inline.
+        if !matches!(self, Self::Inline(_)) {
+            *self = Self::Inline(InlineExecutor);
+        }
+    }
+
+    fn configure_params(&mut self, params: ExecutorParams) {
+        match self {
+            Self::Inline(_) => {}
+            #[cfg(imads_has_threads)]
+            Self::Pool(p) => p.configure_params(params),
+        }
+    }
 }
