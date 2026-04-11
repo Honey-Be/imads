@@ -46,6 +46,22 @@ impl PyEngineConfig {
     fn preset_names() -> Vec<String> {
         Preset::ALL.iter().map(|p| p.name().to_owned()).collect()
     }
+
+    /// Maximum number of engine iterations (the underlying budget cap).
+    ///
+    /// One iteration may execute several truth evaluations, so this is an
+    /// upper bound on iterations rather than a strict eval count. Higher
+    /// layers (e.g. ``imads_hpo.minimize``) typically map a user-facing
+    /// ``max_evals`` value to this field.
+    #[getter]
+    fn max_iters(&self) -> u64 {
+        self.inner.max_iters
+    }
+
+    #[setter]
+    fn set_max_iters(&mut self, value: u64) {
+        self.inner.max_iters = value;
+    }
 }
 
 // ---------------------------------------------------------------------------

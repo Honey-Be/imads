@@ -60,6 +60,21 @@ class EngineConfig:
     def preset_names() -> list[str]:
         return _EngineConfig.preset_names()
 
+    @property
+    def max_iters(self) -> int:
+        """Maximum number of engine iterations.
+
+        One iteration may execute multiple truth evaluations, so this is
+        an upper bound on iterations rather than a strict eval count.
+        Higher-level wrappers (e.g. ``imads_hpo.minimize``) typically
+        forward a user-facing ``max_evals`` value into this field.
+        """
+        return self._inner.max_iters
+
+    @max_iters.setter
+    def max_iters(self, value: int) -> None:
+        self._inner.max_iters = int(value)
+
 
 class EngineOutput:
     """Result of an engine run."""

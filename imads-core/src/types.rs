@@ -132,6 +132,15 @@ pub trait ObjectiveValues: Sized + Clone + Send + Sync + std::fmt::Debug {
     fn to_vec(&self) -> Vec<f64> {
         self.as_slice().to_vec()
     }
+
+    /// Construct a zero-valued instance with the given number of objectives.
+    ///
+    /// Used by [`Evaluator::solver_bias`]'s default implementation so that
+    /// evaluators without a meaningful tau-dependent residual term don't
+    /// need to override `solver_bias` manually. For fixed-arity types
+    /// (`f64`, `[f64; N]`), the `n` argument is ignored — the arity is
+    /// determined by the type itself.
+    fn zero(n: usize) -> Self;
 }
 
 impl ObjectiveValues for f64 {
@@ -150,6 +159,9 @@ impl ObjectiveValues for f64 {
     fn to_vec(&self) -> Vec<f64> {
         vec![*self]
     }
+    fn zero(_n: usize) -> Self {
+        0.0
+    }
 }
 
 impl ObjectiveValues for Vec<f64> {
@@ -162,6 +174,9 @@ impl ObjectiveValues for Vec<f64> {
     fn as_slice(&self) -> &[f64] {
         self
     }
+    fn zero(n: usize) -> Self {
+        vec![0.0; n]
+    }
 }
 
 macro_rules! impl_objective_values_array {
@@ -173,6 +188,7 @@ macro_rules! impl_objective_values_array {
                     if i < $n { Some(self[i]) } else { None }
                 }
                 fn as_slice(&self) -> &[f64] { &self[..] }
+                fn zero(_n: usize) -> Self { [0.0; $n] }
             }
         )*
     };

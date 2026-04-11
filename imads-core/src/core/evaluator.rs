@@ -23,10 +23,19 @@ pub trait Evaluator: std::fmt::Debug + Send + Sync {
     fn mc_sample(&self, x: &XReal, phi: Phi, env: &Env, k: u32) -> (Self::Objectives, Vec<f64>);
 
     /// Optional: deterministic, tau-dependent bias term (e.g., solver residual effects).
+    ///
+    /// The default returns a zero bias for both objectives and constraints,
+    /// which is the correct semantics for evaluators whose underlying
+    /// black-box function has no tau-dependent residual term (e.g. typical
+    /// HPO trials, function-evaluation simulations, etc.).
+    ///
+    /// Override this only when your evaluator genuinely models a
+    /// tolerance-dependent bias such as a finite-element residual.
     fn solver_bias(&self, _x: &XReal, _tau: Tau, _env: &Env) -> (Self::Objectives, Vec<f64>) {
-        // Default: zero bias. For single objective, Objectives must impl Default-like behavior.
-        // Since we can't construct Self::Objectives generically, implementors should override.
-        unimplemented!("solver_bias requires explicit implementation for multi-objective evaluators")
+        (
+            Self::Objectives::zero(self.num_objectives()),
+            vec![0.0; self.num_constraints()],
+        )
     }
 
     /// Number of objectives.

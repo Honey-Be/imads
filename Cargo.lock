@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "imads-core"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "bitflags",
  "rand",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "imads-ffi"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "imads-core",
  "paste",
@@ -375,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "imads-jvm"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "imads-core",
  "imads-ffi",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "imads-py"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "imads-core",
  "pyo3",
@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "imads-wasm"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "imads-core",
  "wit-bindgen 0.41.0",
