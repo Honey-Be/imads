@@ -71,6 +71,17 @@
 - 重複候補を削減するとキャッシュ効率が向上します
 - スコア/優先度は決定的でなければなりません
 
+### 5.1) StratifiedSearch 契約
+
+`StratifiedSearch` は、座標ステップ、方向探索、および Halton 準ランダム探索の 3 つの候補生成
+モードを組み合わせた組み込み `SearchPolicy` です。
+
+- モード配分比率はエンジン構築時に次元数によって決定され、実行中に変更してはなりません（変更すると決定性が破られます）
+- 座標ステップはイテレーションごとに最大 `min(dim, 6)` 方向をポーリングしなければなりません
+- 方向探索は同一の決定論的履歴ウィンドウから改善ベクトルを導出しなければなりません。壁時計時刻やスレッド完了順序に依存してはなりません
+- Halton 点は `env_rev` に紐づけられた決定論的シーケンスインデックスを使用しなければなりません
+- 生成されたすべての候補はメッシュ上に量子化されなければなりません（他の `SearchPolicy` と同様）
+
 ---
 
 ## 5.5) エグゼキュータ（Batch Runner）契約
@@ -122,6 +133,36 @@
 
 ---
 
+## 5.7) AnisotropicMeshGeometry 契約
+
+`EngineConfig.mesh_base_steps` が `Some(steps)` の場合、エンジンは単一のスカラーステップの代わりに
+次元ごとのメッシュステップサイズを使用します。
+
+- `base_steps.len()` は探索次元と等しくなければなりません。不一致は設定エラーです
+- `mesh_muls` は次元ごとのメッシュ乗数を独立に追跡します
+- `SearchContext::mesh_steps`（複数形）は以前のスカラー `mesh_step` を置き換えます
+  - 後方互換性のための `mesh_step()` アクセサは `mesh_steps[0]` を返します
+- 探索およびポーリングにおけるすべてのメッシュ量子化は、対応する座標の次元ごとのステップを使用しなければなりません
+- `env_rev_with_steps()` はキャッシュキーハッシュに `base_steps` ベクトルを含めなければなりません。これにより、異なる異方的設定が異なるキャッシュキーを生成します
+- Poll/メッシュ更新ルールは次元ごとに適用されます。各次元は独自のメッシュ乗数を独立に細分化または粗大化します
+
+---
+
+## 5.8) AcceptancePolicy 契約
+
+`AcceptancePolicy` はパブリックトレイトです（以前は `AcceptanceEngine` として封印されていました）。
+`DefaultAcceptance` がこれを実装しており、デフォルトのままです。
+
+- 受理ポリシーは TRUTH の結果のみを受け取ります。PARTIAL の結果を受理してはなりません
+- `AcceptancePolicy::accept(candidate, filter, barrier)` は同一の入力に対して決定論的な accept/reject 判定を返さなければなりません
+- カスタム実装（例: 多目的向けのパレートベース）は以下を満たさなければなりません:
+  - フィルター優越性: 候補は、現在のフィルター内容に支配されていない場合（またはバリアを改善する場合）にのみ受理されます
+  - バリア単調性: プログレッシブバリアの閾値は増加してはなりません
+  - 決定性: 判定は壁時計時刻、スレッド順序、または OS の乱数に依存してはなりません
+- カスタム `AcceptancePolicy` が内部状態を変更する場合（例: パレートフロントのメンバーシップ）、`policy_rev` をインクリメントしなければなりません
+
+---
+
 ## 6) DIDS ポリシー（DidsPolicy）契約
 
 - `a`（割り当てベクトル）は **early-stop の効率化ツール**です
@@ -170,18 +211,19 @@
 
 ## 10) カスタマイズの概要
 
-✅ 安全にカスタマイズ可能
-- SchedulerPolicy / SearchPolicy / LadderPolicy / DidsPolicy
+安全にカスタマイズ可能:
+- SchedulerPolicy / SearchPolicy（StratifiedSearch を含む） / LadderPolicy / DidsPolicy
 - MarginPolicy / CalibratorPolicy / AuditPolicy
+- AcceptancePolicy（例: 多目的向けのパレートベース）
 - CacheBackend / Telemetry
 
-⚠️ 条件付き（上級者向け）
+条件付き（上級者向け）:
 - Solver ウォームスタート / solver 内部の停止-再開ポリシー
 - PARTIAL 結果の使用範囲の拡張（accept での使用は推奨されません）
+- AnisotropicMeshGeometry（EngineConfig.mesh_base_steps による次元ごとのステップ）
 
-🚫 デフォルトで封印（収束性/正確性に関わる重要部分）
+デフォルトで封印（収束性/正確性に関わる重要部分）:
 - Poll/mesh 更新ルール
-- Filter/Barrier 最終 accept/reject ルール
 
 ## 7.4 目的関数枝刈り契約
 

@@ -9,6 +9,15 @@ This project currently ships five presets in `src/presets.rs`:
 
 > **Note:** All presets now set `search_dim` to `None`. The engine queries the evaluator's `search_dim()` method at runtime to determine the search space dimensionality.
 
+All presets use `DefaultSearch` by default. `StratifiedSearch` is available as a
+drop-in replacement via `PolicyBundle::Search` for users who want the combined
+coordinate-step / directional / Halton exploration strategy (see
+[Architecture](architecture.md#stratifiedsearch)).
+
+Anisotropic mesh geometry can be enabled on any preset by setting
+`EngineConfig.mesh_base_steps` to `Some(vec![...])` with per-dimension step sizes.
+When unset, the default isotropic mesh is used.
+
 ## Recommended usage
 
 Use the presets with the following intent:

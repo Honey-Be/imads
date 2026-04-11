@@ -8,7 +8,7 @@ use std::os::raw::c_char;
 use std::sync::Arc;
 
 use imads_core::core::engine::{Engine, EngineConfig};
-use imads_core::core::evaluator::Evaluator;
+use imads_core::core::evaluator::{Evaluator, EvaluatorErased};
 use imads_core::core::{DefaultBundle, ToyEvaluator};
 use imads_core::presets::Preset;
 use imads_core::types::{Env, Phi, XReal};
@@ -117,6 +117,8 @@ struct FfiEvaluator {
 }
 
 impl Evaluator for FfiEvaluator {
+    type Objectives = f64;
+
     fn cheap_constraints(&self, x: &XReal, _env: &Env) -> bool {
         if let Some(f) = self.vtable.cheap_constraints {
             let vals: Vec<f64> = x.as_f64_slice();
@@ -146,6 +148,10 @@ impl Evaluator for FfiEvaluator {
             );
         }
         (f_out, c_out)
+    }
+
+    fn num_objectives(&self) -> usize {
+        1
     }
 
     fn num_constraints(&self) -> usize {
@@ -184,7 +190,7 @@ fn engine_output_to_ffi(out: imads_core::core::engine::EngineOutput) -> ImadsOut
     };
 
     let (f_best, f_best_valid) = match out.f_best {
-        Some(f) => (f, true),
+        Some(ref f) => (f[0], true),
         None => (f64::NAN, false),
     };
 
@@ -289,7 +295,7 @@ pub unsafe extern "C" fn imads_engine_run(
     let engine = unsafe { &mut *engine };
     let cfg = unsafe { &*cfg };
     let env = ffi_env_to_env(unsafe { &*env });
-    let evaluator: Arc<dyn Evaluator> = Arc::new(ToyEvaluator {
+    let evaluator: Arc<dyn EvaluatorErased> = Arc::new(ToyEvaluator {
         m: cfg.num_constraints,
         dim: cfg.search_dim.unwrap_or(4)
     });
@@ -317,7 +323,7 @@ pub unsafe extern "C" fn imads_engine_run_with_evaluator(
     let engine = unsafe { &mut *engine };
     let cfg = unsafe { &*cfg };
     let env = ffi_env_to_env(unsafe { &*env });
-    let evaluator: Arc<dyn Evaluator> = Arc::new(FfiEvaluator { vtable });
+    let evaluator: Arc<dyn EvaluatorErased> = Arc::new(FfiEvaluator { vtable });
     let out = engine
         .inner
         .run_with_evaluator(cfg, &env, workers as usize, evaluator);
@@ -343,6 +349,213 @@ pub unsafe extern "C" fn imads_output_free(output: *mut ImadsOutput) {
                 out.x_best_ptr,
                 out.x_best_len,
             ))
+        };
+        out.x_best_ptr = std::ptr::null_mut();
+        out.x_best_len = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-objective: fixed-N monomorphized C API via macro
+// ---------------------------------------------------------------------------
+
+/// Multi-objective output (N objectives).
+#[repr(C)]
+pub struct ImadsMultiOutput {
+    /// Pointer to N f64 objective values (caller reads `num_objectives` elements).
+    pub f_best_ptr: *mut f64,
+    pub f_best_len: usize,
+    pub f_best_valid: bool,
+    pub x_best_ptr: *mut i64,
+    pub x_best_len: usize,
+    pub stats: ImadsStats,
+}
+
+/// Multi-objective evaluator vtable.
+#[repr(C)]
+pub struct ImadsMultiEvaluatorVTable {
+    pub cheap_constraints:
+        Option<unsafe extern "C" fn(x: *const f64, dim: usize, user_data: *mut u8) -> i32>,
+    /// Monte Carlo sample. Write N objectives to `f_out[0..num_objectives]`
+    /// and M constraints to `c_out[0..num_constraints]`.
+    pub mc_sample: unsafe extern "C" fn(
+        x: *const f64,
+        dim: usize,
+        tau: u64,
+        smc: u32,
+        k: u32,
+        f_out: *mut f64,
+        num_objectives: usize,
+        c_out: *mut f64,
+        num_constraints: usize,
+        user_data: *mut u8,
+    ),
+    pub num_objectives: usize,
+    pub num_constraints: usize,
+    pub search_dim: usize,
+    pub user_data: *mut u8,
+}
+
+unsafe impl Send for ImadsMultiEvaluatorVTable {}
+unsafe impl Sync for ImadsMultiEvaluatorVTable {}
+
+impl std::fmt::Debug for ImadsMultiEvaluatorVTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImadsMultiEvaluatorVTable")
+            .field("num_objectives", &self.num_objectives)
+            .field("num_constraints", &self.num_constraints)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+struct FfiMultiEvaluator {
+    vtable: ImadsMultiEvaluatorVTable,
+}
+
+impl Evaluator for FfiMultiEvaluator {
+    type Objectives = Vec<f64>;
+
+    fn cheap_constraints(&self, x: &XReal, _env: &Env) -> bool {
+        if let Some(f) = self.vtable.cheap_constraints {
+            let vals: Vec<f64> = x.as_f64_slice();
+            let result = unsafe { f(vals.as_ptr(), vals.len(), self.vtable.user_data) };
+            result != 0
+        } else {
+            true
+        }
+    }
+
+    fn mc_sample(&self, x: &XReal, phi: Phi, _env: &Env, k: u32) -> (Vec<f64>, Vec<f64>) {
+        let vals: Vec<f64> = x.as_f64_slice();
+        let n = self.vtable.num_objectives;
+        let m = self.vtable.num_constraints;
+        let mut f_out = vec![0.0f64; n];
+        let mut c_out = vec![0.0f64; m];
+        unsafe {
+            (self.vtable.mc_sample)(
+                vals.as_ptr(),
+                vals.len(),
+                phi.tau.0,
+                phi.smc.0,
+                k,
+                f_out.as_mut_ptr(),
+                n,
+                c_out.as_mut_ptr(),
+                m,
+                self.vtable.user_data,
+            );
+        }
+        (f_out, c_out)
+    }
+
+    fn solver_bias(&self, _x: &XReal, _tau: imads_core::types::Tau, _env: &Env) -> (Vec<f64>, Vec<f64>) {
+        let n = self.vtable.num_objectives;
+        let m = self.vtable.num_constraints;
+        (vec![0.0; n], vec![0.0; m])
+    }
+
+    fn num_objectives(&self) -> usize {
+        self.vtable.num_objectives
+    }
+
+    fn num_constraints(&self) -> usize {
+        self.vtable.num_constraints
+    }
+
+    fn search_dim(&self) -> Option<usize> {
+        let d = self.vtable.search_dim;
+        if d > 0 { Some(d) } else { None }
+    }
+}
+
+fn engine_output_to_multi_ffi(out: imads_core::core::engine::EngineOutput) -> ImadsMultiOutput {
+    let stats = ImadsStats {
+        truth_evals: out.stats.truth_evals,
+        truth_decision_cache_hits: out.stats.truth_decision_cache_hits,
+        truth_eval_cache_hits: out.stats.truth_eval_cache_hits,
+        partial_steps: out.stats.partial_steps,
+        partial_decision_cache_hits: out.stats.partial_decision_cache_hits,
+        partial_eval_cache_hits: out.stats.partial_eval_cache_hits,
+        cheap_rejects: out.stats.cheap_rejects,
+        invalid_eval_rejects: out.stats.invalid_eval_rejects,
+    };
+
+    let (f_best_ptr, f_best_len, f_best_valid) = match out.f_best {
+        Some(f) => {
+            let len = f.len();
+            let mut v = f.into_boxed_slice();
+            let ptr = v.as_mut_ptr();
+            std::mem::forget(v);
+            (ptr, len, true)
+        }
+        None => (std::ptr::null_mut(), 0, false),
+    };
+
+    let (x_best_ptr, x_best_len) = match out.x_best {
+        Some(xm) => {
+            let mut v = xm.0.into_boxed_slice();
+            let ptr = v.as_mut_ptr();
+            let len = v.len();
+            std::mem::forget(v);
+            (ptr, len)
+        }
+        None => (std::ptr::null_mut(), 0),
+    };
+
+    ImadsMultiOutput {
+        f_best_ptr,
+        f_best_len,
+        f_best_valid,
+        x_best_ptr,
+        x_best_len,
+        stats,
+    }
+}
+
+/// Run the engine with a multi-objective evaluator.
+///
+/// # Safety
+/// All pointer arguments must be valid, non-null, and not concurrently accessed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imads_engine_run_multi(
+    engine: *mut ImadsEngine,
+    cfg: *const EngineConfig,
+    env: *const ImadsEnv,
+    workers: u32,
+    vtable: ImadsMultiEvaluatorVTable,
+) -> ImadsMultiOutput {
+    let engine = unsafe { &mut *engine };
+    let cfg = unsafe { &*cfg };
+    let env = ffi_env_to_env(unsafe { &*env });
+    let evaluator: Arc<dyn EvaluatorErased> = Arc::new(FfiMultiEvaluator { vtable });
+    let out = engine
+        .inner
+        .run_with_evaluator(cfg, &env, workers as usize, evaluator);
+    engine_output_to_multi_ffi(out)
+}
+
+/// Free the allocations in an `ImadsMultiOutput`.
+///
+/// # Safety
+/// `output` must be null or point to a valid `ImadsMultiOutput` whose pointers have not
+/// been previously freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imads_multi_output_free(output: *mut ImadsMultiOutput) {
+    if output.is_null() {
+        return;
+    }
+    let out = unsafe { &mut *output };
+    if !out.f_best_ptr.is_null() && out.f_best_len > 0 {
+        let _ = unsafe {
+            Box::from_raw(std::ptr::slice_from_raw_parts_mut(out.f_best_ptr, out.f_best_len))
+        };
+        out.f_best_ptr = std::ptr::null_mut();
+        out.f_best_len = 0;
+    }
+    if !out.x_best_ptr.is_null() && out.x_best_len > 0 {
+        let _ = unsafe {
+            Box::from_raw(std::ptr::slice_from_raw_parts_mut(out.x_best_ptr, out.x_best_len))
         };
         out.x_best_ptr = std::ptr::null_mut();
         out.x_best_len = 0;

@@ -1,6 +1,6 @@
-use crate::types::{Env, Phi, Tau, XReal, stable_hash_u64};
+use crate::types::{Env, ObjectiveValues, Phi, Tau, XReal, stable_hash_u64};
 
-/// Black-box evaluator interface.
+/// Black-box evaluator interface with associated objective type.
 ///
 /// In a real integration this would call your expensive simulator/solver.
 ///
@@ -9,6 +9,9 @@ use crate::types::{Env, Phi, Tau, XReal, stable_hash_u64};
 /// - If you use RNG, derive seeds deterministically from the inputs (e.g., hash).
 /// - Prefer MC **prefix reuse**: results for S_i should be reusable as prefix of S_{i+1}.
 pub trait Evaluator: std::fmt::Debug + Send + Sync {
+    /// The objective value container type.
+    type Objectives: ObjectiveValues;
+
     /// Cheap constraints gate (Stage A). Return false to reject without black-box evaluation.
     fn cheap_constraints(&self, _x: &XReal, _env: &Env) -> bool {
         true
@@ -17,12 +20,17 @@ pub trait Evaluator: std::fmt::Debug + Send + Sync {
     /// Return a deterministic sample of the objective and constraint values for a given sample index.
     ///
     /// `k` is 0-based and must be stable across runs.
-    fn mc_sample(&self, x: &XReal, phi: Phi, env: &Env, k: u32) -> (f64, Vec<f64>);
+    fn mc_sample(&self, x: &XReal, phi: Phi, env: &Env, k: u32) -> (Self::Objectives, Vec<f64>);
 
     /// Optional: deterministic, tau-dependent bias term (e.g., solver residual effects).
-    fn solver_bias(&self, _x: &XReal, _tau: Tau, _env: &Env) -> (f64, Vec<f64>) {
-        (0.0, Vec::new())
+    fn solver_bias(&self, _x: &XReal, _tau: Tau, _env: &Env) -> (Self::Objectives, Vec<f64>) {
+        // Default: zero bias. For single objective, Objectives must impl Default-like behavior.
+        // Since we can't construct Self::Objectives generically, implementors should override.
+        unimplemented!("solver_bias requires explicit implementation for multi-objective evaluators")
     }
+
+    /// Number of objectives.
+    fn num_objectives(&self) -> usize;
 
     /// Number of constraints.
     fn num_constraints(&self) -> usize;
@@ -34,6 +42,47 @@ pub trait Evaluator: std::fmt::Debug + Send + Sync {
     /// The default returns `None`, meaning "use config or incumbent length".
     fn search_dim(&self) -> Option<usize> {
         None
+    }
+}
+
+/// Marker trait: single-objective evaluator (Objectives = f64).
+pub trait SingleObjectiveEvaluator: Evaluator<Objectives = f64> {}
+impl<E: Evaluator<Objectives = f64>> SingleObjectiveEvaluator for E {}
+
+/// Type-erased evaluator wrapper for internal engine use.
+///
+/// The engine works with `Vec<f64>` objectives internally to avoid generic infection.
+/// This trait provides a non-generic interface.
+pub trait EvaluatorErased: std::fmt::Debug + Send + Sync {
+    fn cheap_constraints(&self, x: &XReal, env: &Env) -> bool;
+    fn mc_sample(&self, x: &XReal, phi: Phi, env: &Env, k: u32) -> (Vec<f64>, Vec<f64>);
+    fn solver_bias(&self, x: &XReal, tau: Tau, env: &Env) -> (Vec<f64>, Vec<f64>);
+    fn num_objectives(&self) -> usize;
+    fn num_constraints(&self) -> usize;
+    fn search_dim(&self) -> Option<usize>;
+}
+
+/// Blanket implementation: any concrete Evaluator can be used as EvaluatorErased.
+impl<E: Evaluator> EvaluatorErased for E {
+    fn cheap_constraints(&self, x: &XReal, env: &Env) -> bool {
+        Evaluator::cheap_constraints(self, x, env)
+    }
+    fn mc_sample(&self, x: &XReal, phi: Phi, env: &Env, k: u32) -> (Vec<f64>, Vec<f64>) {
+        let (obj, cons) = Evaluator::mc_sample(self, x, phi, env, k);
+        (obj.to_vec(), cons)
+    }
+    fn solver_bias(&self, x: &XReal, tau: Tau, env: &Env) -> (Vec<f64>, Vec<f64>) {
+        let (obj, cons) = Evaluator::solver_bias(self, x, tau, env);
+        (obj.to_vec(), cons)
+    }
+    fn num_objectives(&self) -> usize {
+        Evaluator::num_objectives(self)
+    }
+    fn num_constraints(&self) -> usize {
+        Evaluator::num_constraints(self)
+    }
+    fn search_dim(&self) -> Option<usize> {
+        Evaluator::search_dim(self)
     }
 }
 
@@ -66,6 +115,8 @@ impl ToyEvaluator {
 }
 
 impl Evaluator for ToyEvaluator {
+    type Objectives = f64;
+
     fn cheap_constraints(&self, _x: &XReal, _env: &Env) -> bool {
         true
     }
@@ -115,6 +166,10 @@ impl Evaluator for ToyEvaluator {
             cb.push(1e-6 * t * (j as f64 + 1.0));
         }
         (fb, cb)
+    }
+
+    fn num_objectives(&self) -> usize {
+        1
     }
 
     fn num_constraints(&self) -> usize {

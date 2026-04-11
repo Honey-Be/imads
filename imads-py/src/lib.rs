@@ -6,7 +6,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use imads_core::core::engine::{Engine, EngineConfig, EngineOutput};
-use imads_core::core::evaluator::Evaluator;
+use imads_core::core::evaluator::{Evaluator, EvaluatorErased};
 use imads_core::core::DefaultBundle;
 use imads_core::presets::Preset;
 use imads_core::types::{Env, Phi, XReal};
@@ -84,9 +84,16 @@ struct PyEngineOutput {
 
 #[pymethods]
 impl PyEngineOutput {
+    /// Primary (first) objective best value. For single-objective, this is the only value.
     #[getter]
     fn f_best(&self) -> Option<f64> {
-        self.inner.f_best
+        self.inner.f_best.as_ref().map(|f| f[0])
+    }
+
+    /// All objective best values (for multi-objective optimization).
+    #[getter]
+    fn f_best_all(&self) -> Option<Vec<f64>> {
+        self.inner.f_best.clone()
     }
 
     #[getter]
@@ -117,7 +124,7 @@ impl PyEngineOutput {
     fn __repr__(&self) -> String {
         format!(
             "EngineOutput(f_best={:?}, truth_evals={}, partial_steps={})",
-            self.inner.f_best, self.inner.stats.truth_evals, self.inner.stats.partial_steps,
+            self.inner.f_best.as_ref().map(|f| f[0]), self.inner.stats.truth_evals, self.inner.stats.partial_steps,
         )
     }
 }
@@ -144,6 +151,8 @@ unsafe impl Send for PyEvaluator {}
 unsafe impl Sync for PyEvaluator {}
 
 impl Evaluator for PyEvaluator {
+    type Objectives = f64;
+
     fn cheap_constraints(&self, x: &XReal, _env: &Env) -> bool {
         Python::attach(|py| {
             let vals = x.as_f64_slice();
@@ -164,6 +173,10 @@ impl Evaluator for PyEvaluator {
             let (f, c): (f64, Vec<f64>) = result.extract(py).expect("mc_sample return type error");
             (f, c)
         })
+    }
+
+    fn num_objectives(&self) -> usize {
+        1
     }
 
     fn num_constraints(&self) -> usize {
@@ -219,7 +232,7 @@ impl PyEngine {
         num_constraints: usize,
         workers: usize,
     ) -> PyEngineOutput {
-        let eval: Arc<dyn Evaluator> = Arc::new(PyEvaluator {
+        let eval: Arc<dyn EvaluatorErased> = Arc::new(PyEvaluator {
             obj: evaluator,
             m: num_constraints,
         });

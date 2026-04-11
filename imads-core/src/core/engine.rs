@@ -1,8 +1,8 @@
 use crate::backends::cache::{DecisionCacheBackend, EvalCacheBackend};
 use crate::core::acceptance::{
-    AcceptanceConfig, AcceptanceEngine, DefaultAcceptance, TruthDecision,
+    AcceptanceConfig, AcceptancePolicy, DefaultAcceptance, TruthDecision,
 };
-use crate::core::evaluator::{Evaluator, ToyEvaluator};
+use crate::core::evaluator::{EvaluatorErased, ToyEvaluator};
 use crate::core::executor::{AdaptiveExecutor, ExecCtx, Executor, ExecutorParams, WorkOutcome};
 use crate::core::poll::DefaultPoll;
 use crate::policies::{
@@ -10,9 +10,10 @@ use crate::policies::{
     MarginPolicy, SchedulerPolicy, SearchPolicy,
 };
 use crate::types::{
-    CacheTag, CandidateAuditOrigin, CandidateId, CandidateStageState, CandidateStatus,
-    DecisionCacheKey, Env, Estimates, EvalMeta, JobResult, MeshGeometry, Phi, PolicyRev,
-    ReadyCandidateView, ReadyKind, Smc, Tau, WorkItem, XMesh, env_rev, mesh_to_real,
+    AnisotropicMeshGeometry, CacheTag, CandidateAuditOrigin, CandidateId, CandidateStageState,
+    CandidateStatus, DecisionCacheKey, Env, Estimates, EvalMeta, JobResult, MeshGeometry, Phi,
+    PolicyRev, ReadyCandidateView, ReadyKind, Smc, Tau, WorkItem, XMesh, env_rev_with_steps,
+    mesh_to_real_aniso,
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -25,6 +26,11 @@ pub struct EngineConfig {
     pub tau_levels: Vec<Tau>,
     pub smc_levels: Vec<Smc>,
     pub mesh_base_step: f64,
+    /// Per-dimension base steps for anisotropic mesh geometry.
+    ///
+    /// When `Some`, each dimension uses its own base lattice step.
+    /// When `None`, all dimensions use the scalar `mesh_base_step`.
+    pub mesh_base_steps: Option<Vec<f64>>,
     /// Initial mesh multiplier in base-lattice units (Δ = Δ₀ * mesh_mul).
     pub mesh_mul_init: i64,
     /// Minimum mesh multiplier (finest mesh).
@@ -254,6 +260,7 @@ impl EngineConfig {
                 tau_levels,
                 smc_levels,
                 mesh_base_step,
+                mesh_base_steps: None,
                 mesh_mul_init,
                 mesh_mul_min,
                 mesh_refine_div,
@@ -378,14 +385,16 @@ fn audit_of_from_origin(origin: &CandidateAuditOrigin) -> AuditOf {
     }
 }
 
-fn truth_as_estimates(phi: Phi, f: f64, c: &[f64]) -> Estimates {
+fn truth_as_estimates(phi: Phi, f: &[f64], c: &[f64]) -> Estimates {
+    let num_objectives = f.len();
     Estimates {
-        f_hat: f,
-        f_se: 0.0,
+        f_hat: f.to_vec(),
+        f_se: vec![0.0; num_objectives],
         c_hat: c.to_vec(),
         c_se: vec![0.0; c.len()],
         phi,
         tau_scale: phi.tau.0 as f64,
+        num_objectives,
     }
 }
 
@@ -492,7 +501,7 @@ pub struct EngineStats {
 #[derive(Clone, Debug)]
 pub struct EngineOutput {
     pub x_best: Option<XMesh>,
-    pub f_best: Option<f64>,
+    pub f_best: Option<Vec<f64>>,
     pub stats: EngineStats,
 }
 
@@ -525,7 +534,7 @@ pub struct Engine<P: PolicyBundle> {
 
 impl<P: PolicyBundle> Engine<P> {
     pub fn run(&mut self, cfg: &EngineConfig, env: &Env, workers: usize) -> EngineOutput {
-        let evaluator: Arc<dyn Evaluator> = Arc::new(ToyEvaluator {
+        let evaluator: Arc<dyn EvaluatorErased> = Arc::new(ToyEvaluator {
             m: cfg.num_constraints,
             dim: cfg.search_dim.unwrap_or(4),
         });
@@ -537,9 +546,8 @@ impl<P: PolicyBundle> Engine<P> {
         cfg: &EngineConfig,
         env: &Env,
         workers: usize,
-        evaluator: Arc<dyn Evaluator>,
+        evaluator: Arc<dyn EvaluatorErased>,
     ) -> EngineOutput {
-        let env_rev = env_rev(env);
         let env_arc = Arc::new(env.clone());
         let eval_cache_arc: Arc<P::EvalCache> = Arc::new(self.eval_cache.clone());
         let decision_cache_arc: Arc<P::DecisionCache> = Arc::new(self.decision_cache.clone());
@@ -587,13 +595,38 @@ impl<P: PolicyBundle> Engine<P> {
             "mesh_base_step must be finite"
         );
         assert!(cfg.mesh_base_step > 0.0, "mesh_base_step must be positive");
-        let mut geo = MeshGeometry {
+        let iso_geo = MeshGeometry {
             base_step: cfg.mesh_base_step,
             mesh_mul: cfg.mesh_mul_init.max(1),
             mesh_mul_min: cfg.mesh_mul_min.max(1),
             refine_div: cfg.mesh_refine_div.max(2),
             poll_step_mult: cfg.poll_step_mult.max(1),
         };
+        // Build anisotropic geometry: use per-dim base_steps if provided, else broadcast scalar.
+        let mut geo = if let Some(ref steps) = cfg.mesh_base_steps {
+            assert!(
+                !steps.is_empty(),
+                "mesh_base_steps must be non-empty when provided"
+            );
+            for (i, &s) in steps.iter().enumerate() {
+                assert!(
+                    s.is_finite() && s > 0.0,
+                    "mesh_base_steps[{i}] must be finite and positive"
+                );
+            }
+            AnisotropicMeshGeometry {
+                base_steps: steps.clone(),
+                mesh_muls: vec![cfg.mesh_mul_init.max(1); steps.len()],
+                mesh_mul_min: cfg.mesh_mul_min.max(1),
+                refine_div: cfg.mesh_refine_div.max(2),
+                poll_step_mult: cfg.poll_step_mult.max(1),
+            }
+        } else {
+            iso_geo.to_anisotropic(resolved_dim.max(1))
+        };
+
+        // Compute env revision including base_steps for cache key correctness.
+        let env_rev = env_rev_with_steps(env, &geo.base_steps);
 
         // DIDS assignment vector a_j in 1..=L.
         let cal_state0 = self.calibrator.state();
@@ -615,7 +648,7 @@ impl<P: PolicyBundle> Engine<P> {
         let mut accept = DefaultAcceptance::new(accept_cfg);
 
         let mut x_best: Option<XMesh> = None;
-        let mut f_best: Option<f64> = None;
+        let mut f_best: Option<Vec<f64>> = None;
         let mut incumbent_id: u64 = 0;
 
         // Run-global candidate store.
@@ -639,14 +672,17 @@ impl<P: PolicyBundle> Engine<P> {
             } else {
                 resolved_dim
             };
-            let incumbent_x: Option<Vec<f64>> = x_best
-                .as_ref()
-                .map(|xb| xb.0.iter().map(|&u| (u as f64) * geo.base_step).collect());
+            let incumbent_x: Option<Vec<f64>> = x_best.as_ref().map(|xb| {
+                xb.0.iter()
+                    .enumerate()
+                    .map(|(i, &u)| (u as f64) * geo.base_steps.get(i).copied().unwrap_or(geo.base_steps[0]))
+                    .collect()
+            });
             self.search
                 .set_context(&crate::policies::search::SearchContext {
                     dim,
                     incumbent_x,
-                    mesh_step: geo.current_step(),
+                    mesh_steps: geo.current_steps(),
                 });
 
             let raw = self.search.propose(&state, cfg.candidates_per_iter);
@@ -655,11 +691,11 @@ impl<P: PolicyBundle> Engine<P> {
             let mut scored: Vec<(CandidateId, XMesh, f64)> = raw
                 .iter()
                 .map(|rc| {
-                    let x = crate::policies::search::project_to_mesh(rc, &geo);
+                    let x = crate::policies::search::project_to_aniso_mesh(rc, &geo);
                     let score = self.search.score(
                         rc,
                         &crate::policies::search::SearchHints {
-                            incumbent_score: f_best,
+                            incumbent_score: f_best.as_ref().map(|f| f[0]),
                         },
                     );
                     (rc.id, x, score)
@@ -697,15 +733,15 @@ impl<P: PolicyBundle> Engine<P> {
             while steps_left > 0 {
                 let th = self.margin.thresholds(&self.calibrator.state());
 
-                let mut ready_view = self.make_ready_view(&cands, &th, f_best, iter);
+                let mut ready_view = self.make_ready_view(&cands, &th, f_best.as_ref(), iter);
                 if ready_view.is_empty() {
                     // Search exhaustion: inject Poll points once per iteration, then retry.
                     if !poll_generated
                         && !iter_improved
                         && let Some(center) = x_best.as_ref()
                     {
-                        let step = geo.poll_step_units();
-                        let poll_pts = DefaultPoll::generate_points(center, step);
+                        let steps = geo.poll_step_units();
+                        let poll_pts = DefaultPoll::generate_points_aniso(center, &steps);
                         // Deterministic ID namespace for poll points (high bit set).
                         let base: u64 = 0x8000_0000_0000_0000u64 | (iter << 32);
                         for (d, x) in poll_pts.into_iter().enumerate() {
@@ -790,7 +826,7 @@ impl<P: PolicyBundle> Engine<P> {
                     eval_cache: eval_cache_arc.clone(),
                     decision_cache: decision_cache_arc.clone(),
                     ladder_len,
-                    base_step: geo.base_step,
+                    base_steps: geo.base_steps.clone(),
                 });
                 self.executor.configure_params(ExecutorParams {
                     chunk_base,
@@ -820,14 +856,14 @@ impl<P: PolicyBundle> Engine<P> {
                         cfg,
                         evaluator.as_ref(),
                         env,
-                        geo.base_step,
+                        &geo.base_steps,
                         &ladder,
                         &assignment,
                         &th,
                         cand,
                         out,
                         policy_rev,
-                        f_best,
+                        f_best.as_ref(),
                         &mut stats,
                     );
 
@@ -840,13 +876,13 @@ impl<P: PolicyBundle> Engine<P> {
 
                     // Acceptance: TRUTH only (sealed).
                     if let JobResult::Truth { f, v, .. } = &job.result {
-                        match accept.decide_truth(&cand.x, *f, *v) {
+                        let f_primary = f.first().copied().unwrap_or(f64::INFINITY);
+                        match accept.decide_truth(&cand.x, f_primary, *v) {
                             TruthDecision::Accept => {
-                                // Update incumbent.
                                 iter_improved = true;
                                 new_incumbent = true;
                                 incumbent_id += 1;
-                                f_best = Some(*f);
+                                f_best = Some(f.clone());
                                 x_best = Some(cand.x.clone());
                             }
                             TruthDecision::Reject => {}
@@ -983,7 +1019,7 @@ impl<P: PolicyBundle> Engine<P> {
         &self,
         cands: &[CandidateStageState],
         th: &crate::policies::margin::Thresholds,
-        incumbent_f: Option<f64>,
+        incumbent_f: Option<&Vec<f64>>,
         epoch: u64,
     ) -> Vec<ReadyCandidateView> {
         let mut out: Vec<ReadyCandidateView> = Vec::new();
@@ -1035,16 +1071,16 @@ impl<P: PolicyBundle> Engine<P> {
     fn materialize_job_result(
         &mut self,
         cfg: &EngineConfig,
-        evaluator: &dyn Evaluator,
+        evaluator: &dyn EvaluatorErased,
         env: &Env,
-        base_step: f64,
+        base_steps: &[f64],
         ladder: &[Phi],
         assignment: &[usize],
         th: &crate::policies::margin::Thresholds,
         cand: &mut CandidateStageState,
         out: &WorkOutcome,
         policy_rev: PolicyRev,
-        incumbent_f: Option<f64>,
+        incumbent_f: Option<&Vec<f64>>,
         stats: &mut EngineStats,
     ) -> MaterializedJob {
         let phi = out.item.phi;
@@ -1151,7 +1187,7 @@ impl<P: PolicyBundle> Engine<P> {
                     cand.status = CandidateStatus::DoneTruth;
                     let paired_sample =
                         if is_paired_checkpoint(cand.audit_origin.as_ref(), out.item.phi_idx) {
-                            let est = truth_as_estimates(meta.phi, *f, c);
+                            let est = truth_as_estimates(meta.phi, f, c);
                             Some(crate::policies::PairedAuditSample {
                                 paired_phi: meta.phi,
                                 paired_phi_idx: out.item.phi_idx,
@@ -1191,7 +1227,7 @@ impl<P: PolicyBundle> Engine<P> {
         // Sticky cheap constraints.
         if !cand.cheap_checked {
             cand.cheap_checked = true;
-            match mesh_to_real(&cand.x, base_step) {
+            match mesh_to_real_aniso(&cand.x, base_steps) {
                 Ok(x_real) => {
                     cand.cheap_ok = evaluator.cheap_constraints(&x_real, env);
                 }
@@ -1362,7 +1398,8 @@ impl<P: PolicyBundle> Engine<P> {
                     cfg,
                 ) {
                     let (lcb, _ucb) = self.margin.objective_bounds(&estimates, th);
-                    if lcb >= best - th.eps_f {
+                    let best_primary = best.first().copied().unwrap_or(f64::INFINITY);
+                    if lcb >= best_primary - th.eps_f {
                         cand.status = CandidateStatus::DoneStoppedPartial {
                             at_phi_idx: out.item.phi_idx,
                         };
@@ -1428,7 +1465,7 @@ impl<P: PolicyBundle> Engine<P> {
         // TRUTH
         cand.status = CandidateStatus::DoneTruth;
         let c = estimates.c_hat.clone();
-        let f = estimates.f_hat;
+        let f = estimates.f_hat.clone();
         let feasible = c.iter().all(|&cj| cj <= 0.0);
         let v = c.iter().map(|&cj| cj.max(0.0)).fold(0.0, f64::max);
         let jr = JobResult::Truth {

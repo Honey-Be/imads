@@ -9,6 +9,15 @@
 
 > **참고:** 모든 프리셋은 이제 `search_dim`을 `None`으로 설정합니다. 엔진은 런타임에 evaluator의 `search_dim()` 메서드를 조회하여 탐색 공간의 차원을 결정합니다.
 
+모든 프리셋은 기본적으로 `DefaultSearch`를 사용합니다. `StratifiedSearch`는
+좌표 스텝/방향/Halton 탐색 전략의 결합을 원하는 사용자를 위해
+`PolicyBundle::Search`를 통한 드롭인 대체재로 사용할 수 있습니다
+([아키텍처](architecture.md#stratifiedsearch) 참조).
+
+이방성 메시 기하는 `EngineConfig.mesh_base_steps`를 차원별 스텝 크기를 포함한
+`Some(vec![...])`로 설정하여 모든 프리셋에서 활성화할 수 있습니다.
+설정하지 않으면 기본 등방성 메시가 사용됩니다.
+
 ## 권장 사용법
 
 다음과 같은 목적에 따라 프리셋을 사용하십시오:

@@ -5,7 +5,7 @@
 | Runtime | Backend | How |
 |---------|---------|-----|
 | **CPython** | PyO3 native extension (`_imads.so`) | `maturin develop` |
-| **GraalPython** | Java interop → JNI (`libimads_jni`) | `java.library.path` + classpath |
+| **GraalPython** | Java interop → FFM (`imads-jvm`) | JDK 22+, `java.library.path` |
 
 올바른 백엔드는 import 시점에 자동으로 선택됩니다.
 
@@ -16,23 +16,23 @@
 ```bash
 cd imads-py
 # if not installed
-pip install maturin 
+pip install maturin
 maturin develop --release
 ```
 
 ### GraalPython
 
 ```bash
-# Build JNI native library
-cargo build -p imads-jni --release
+# 네이티브 라이브러리 빌드 (공유 라이브러리)
+cargo build -p imads-ffi --release
 
-# Compile Java bridge
-javac -d imads-jni/java/target imads-jni/java/src/main/java/io/imads/*.java
+# FFM Java 브릿지 컴파일 (JDK 22+ 필요)
+javac -d imads-jvm/target imads-jvm/src/main/java/io/imads/*.java
 
-# Run with GraalPython
+# GraalPython으로 실행
 graalpy --jvm \
     --vm.Djava.library.path=target/release \
-    --vm.cp=imads-jni/java/target \
+    --vm.cp=imads-jvm/target \
     your_script.py
 ```
 
@@ -53,7 +53,7 @@ print(imads.EngineConfig.preset_names())
 # ['legacy_baseline', 'balanced', 'conservative', 'throughput']
 ```
 
-## Custom Evaluator (두 런타임에서 동일)
+## 사용자 정의 Evaluator (두 런타임에서 동일)
 
 ```python
 class MyEvaluator:
@@ -76,17 +76,45 @@ output = engine.run(cfg, env, workers=4, evaluator=evaluator, num_constraints=2)
 
 > **참고:** `search_dim()`은 선택 사항입니다. evaluator가 이를 제공하면, 엔진이 자동으로 탐색 공간의 차원 수를 파악합니다. 생략하면, 엔진은 `EngineConfig.search_dim`(설정된 경우) 또는 incumbent의 길이를 사용합니다. 프리셋은 이제 기본적으로 `search_dim=None`이며, evaluator가 이를 제공할 것을 기대합니다.
 
+## 다목적 Evaluator
+
+다목적 최적화의 경우, 단일 float 대신 목적 함수 값의 리스트를 반환합니다:
+
+```python
+class MyMultiEvaluator:
+    def mc_sample(self, x: list[float], tau: int, smc: int, k: int) -> tuple[list[float], list[float]]:
+        f1 = sum(xi ** 2 for xi in x)
+        f2 = sum((xi - 1) ** 2 for xi in x)
+        c = [sum(x) - 1.0]
+        return [f1, f2], c
+
+    def num_objectives(self) -> int:
+        return 2
+
+evaluator = MyMultiEvaluator()
+output = engine.run(cfg, env, workers=4, evaluator=evaluator, num_constraints=1)
+
+# 최적 해의 모든 목적 함수 값에 접근
+print(output.f_best_all)   # 예: [0.123, 0.456]
+print(output.f_best)       # 첫 번째 목적 함수 (하위 호환): 0.123
+print(output.num_objectives)  # 2
+```
+
+`output.f_best_all`은 최적 목적 함수 값의 전체 `Vec<f64>`를 반환합니다.
+`output.f_best`는 첫 번째 목적 함수에 대한 편의 접근자로 계속 사용할 수 있습니다.
+`output.num_objectives`는 목적 함수의 수를 보고합니다.
+
 ## 아키텍처
 
 ```
 imads/__init__.py          ← 런타임 자동 감지
 ├── imads/_cpython.py      ← PyO3 _imads native extension 래핑
-└── imads/_graalpy.py      ← GraalPython java interop을 통한 JNI 래핑
+└── imads/_graalpy.py      ← GraalPython java interop을 통한 FFM 래핑 (JDK 22+)
 ```
 
 ## 성능 참고 사항
 
 - **CPython**: 각 `mc_sample` 호출은 GIL을 통해 Python/Rust 경계를 넘습니다.
-- **GraalPython**: 각 `mc_sample` 호출은 Python/Java/Rust 경계를 넘습니다.
+- **GraalPython**: 각 `mc_sample` 호출은 FFM을 통해 Python/Java/Rust 경계를 넘습니다.
 - 연산이 무거운 evaluator의 경우, Python 측 코드를 가볍게 유지하십시오.
 - 다중 워커 실행은 GIL/JVM 획득 사이에서 병렬화됩니다.

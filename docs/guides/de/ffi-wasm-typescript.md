@@ -1,54 +1,66 @@
 # WASM / TypeScript FFI Guide
 
-## npm-Paket: `imads-wasm`
+## WASI Component Model
 
-Die WASM-Bindings werden als einzelnes npm-Paket mit drei Build-Targets ausgeliefert:
+Das `imads-wasm`-Crate wurde umgeschrieben, um das **WASI Component Model** mit
+`wit-bindgen` zu verwenden. Es ersetzt den bisherigen `wasm-bindgen`-basierten Ansatz. Das WIT
+(WebAssembly Interface Type) Interface definiert den Vertrag zwischen dem Host und der
+Komponente.
 
-| Target | Anwendungsfall | `init()` erforderlich? | Module format |
-|--------|----------------|:----------------------:|:-------------:|
-| `bundler` | Webpack 5+, Vite, Rollup | Nein | ESM |
-| `web` | `<script type="module">` | Ja (`await init()`) | ESM |
-| `nodejs` | Node.js ohne Bundler | Nein | CJS |
+### WIT Interface
 
-### package.json exports
+Das WIT Interface ist in `imads-wasm/wit/imads.wit` definiert und stellt bereit:
+
+- Engine-Erstellung und -Lebenszyklus
+- Konfiguration ueber Presets
+- Single-Objective- und Multi-Objective-`run`-Funktionen
+- Custom-Evaluator-Callbacks
+
+### Erstellen
+
+```bash
+# Build the WASI component (requires cargo-component)
+cd imads-wasm && cargo component build --release
+```
+
+Dies erzeugt eine `.wasm`-Komponente in `target/wasm32-wasip2/release/`.
+
+### JavaScript/TypeScript-Bindings generieren
+
+Verwenden Sie `jco`, um die Komponente in JavaScript/TypeScript-Module zu transpilieren:
+
+```bash
+# Install jco (if not already installed)
+npm install -g @bytecodealliance/jco
+
+# Transpile to JS/TS
+jco transpile target/wasm32-wasip2/release/imads_wasm.wasm \
+    --out-dir npm/dist \
+    --map 'imads:core/*=./imads-*.js'
+```
+
+Dies erzeugt:
+- `npm/dist/imads_wasm.js` — ES-Modul mit allen Exports
+- `npm/dist/imads_wasm.d.ts` — TypeScript-Typdeklarationen
+- `npm/dist/*.wasm` — Kernmodul(e)
+
+### npm-Paket: `imads-wasm`
+
+Die transpilierte Ausgabe wird als Standard-npm-Paket verteilt:
 
 ```jsonc
 {
   "exports": {
-    ".":         { "import": "./bundler/...", "require": "./nodejs/..." },
-    "./web":     { "import": "./web/..." },
-    "./bundler": { "import": "./bundler/..." },
-    "./nodejs":  { "require": "./nodejs/..." }
+    ".": { "import": "./dist/imads_wasm.js", "types": "./dist/imads_wasm.d.ts" }
   }
 }
 ```
 
-Bundler, die `package.json` exports unterstuetzen (Webpack 5+, Vite, Rollup mit `@rollup/plugin-node-resolve`), waehlen automatisch das `bundler`-Target aus.
-
-## Build-Anleitung
-
-```bash
-# All three targets (recommended)
-make wasm-npm
-
-# Individual targets
-make wasm-bundler    # for bundlers (Webpack, Vite)
-make wasm-web        # for direct browser use
-make wasm-nodejs     # for Node.js
-
-# Or use the script directly
-cd imads-wasm && ./build-npm.sh
-```
-
-Ausgabe: `imads-wasm/npm/` mit den Unterverzeichnissen `bundler/`, `web/`, `nodejs/`.
-
-## Verwendung nach Umgebung
+## Verwendung
 
 ### Mit einem Bundler (Webpack 5+, Vite)
 
 ```typescript
-// Bundler resolves "imads-wasm" → npm/bundler/imads_wasm.js
-// .wasm file is loaded automatically by the bundler — no init() needed
 import { Engine, EngineConfig, Env } from "imads-wasm";
 
 const cfg = EngineConfig.fromPreset("balanced");
@@ -73,49 +85,28 @@ import wasm from "vite-plugin-wasm";
 export default { plugins: [wasm()] };
 ```
 
-### Ohne Bundler (Browser)
-
-```html
-<script type="module">
-  // Use the ./web subpath export
-  import init, { Engine, EngineConfig, Env } from "imads-wasm/web";
-
-  await init();  // must call init() first
-  const cfg = EngineConfig.fromPreset("balanced");
-  const output = new Engine().run(cfg, new Env(1, 2, 3, 4));
-  console.log(output.fBest);
-</script>
-```
-
-### Node.js
+### Node.js (ESM)
 
 ```javascript
-// CommonJS — uses ./nodejs subpath
-const { Engine, EngineConfig, Env } = require("imads-wasm/nodejs");
+import { Engine, EngineConfig, Env } from "imads-wasm";
 
 const cfg = EngineConfig.fromPreset("balanced");
 const output = new Engine().run(cfg, new Env(1, 2, 3, 4));
 console.log(output.fBest);
 ```
 
-### ESM in Node.js
-
-```javascript
-// Uses the default export (bundler target, works with Node 18+ ESM)
-import { Engine, EngineConfig, Env } from "imads-wasm";
-```
+Node.js 18+ mit ESM-Unterstuetzung ist erforderlich. Die Komponente wird ueber den Standard-ESM-Import geladen.
 
 ## Verwendung ueber Framework-Bindings
 
-| Framework | Import-Stil | Verwendetes Target |
-|-----------|-------------|:------------------:|
-| **Kotlin/JS** | `@JsModule("imads-wasm")` | `bundler` |
-| **Scala.js** | `@JSImport("imads-wasm", Namespace)` | `bundler` |
-| **ClojureScript** | `(:require ["imads-wasm" :as wasm])` | `bundler` |
-| **TypeScript** (Bundler) | `import { ... } from "imads-wasm"` | `bundler` |
-| **TypeScript** (Browser) | `import init, { ... } from "imads-wasm/web"` | `web` |
+| Framework | Import-Stil | Hinweise |
+|-----------|-------------|:--------:|
+| **Kotlin/JS** | `@JsModule("imads-wasm")` | ueber Bundler |
+| **Scala.js** | `@JSImport("imads-wasm", Namespace)` | ueber Bundler |
+| **ClojureScript** | `(:require ["imads-wasm" :as wasm])` | ueber Bundler |
+| **TypeScript** (Bundler) | `import { ... } from "imads-wasm"` | Bundler |
 
-Alle JS-Target-Framework-Bindings (Kotlin/JS, Scala.js, CLJS) setzen das `bundler`-Target voraus.
+Alle JS-Target-Framework-Bindings (Kotlin/JS, Scala.js, CLJS) setzen voraus, dass ein Bundler vorhanden ist.
 Deren Build-Werkzeuge (Gradle+Webpack, sbt+Scala.js Linker, shadow-cljs) fungieren als Bundler.
 
 ## Custom Evaluator
@@ -138,21 +129,24 @@ function searchDim(): number | undefined {
 const output = engine.runWithEvaluator(cfg, env, mcSample, 2, cheapConstraints, searchDim);
 ```
 
-## Build fuer WASI (mit Threads)
+## Build fuer WASI-Ziele
 
 ```bash
+# Component model (empfohlen)
+cargo component build -p imads-wasm --release
+
+# Legacy-WASI-Ziele (weiterhin unterstuetzt)
 cargo build -p imads-wasm --target wasm32-wasip1 --release          # single-threaded
 cargo build -p imads-wasm --target wasm32-wasip1-threads --release  # multi-threaded
-cargo build -p imads-wasm --target wasm32-wasip3 --release          # component model
 ```
 
 ## Threading-Modell
 
 | Target | Workers | Hinweise |
 |--------|---------|----------|
-| `wasm32-unknown-unknown` (Browser) | nur 1 | Kein `std::thread` |
+| `wasm32-wasip2` (Komponente) | N | Component Model + Threads |
 | `wasm32-wasip1` | nur 1 | Keine Thread-Unterstuetzung |
 | `wasm32-wasip1-threads` | N | Vollstaendiger Thread-Pool |
-| `wasm32-wasip3` | N | Component Model + Threads |
+| `wasm32-unknown-unknown` (Browser) | nur 1 | Kein `std::thread` |
 
 `AdaptiveExecutor` waehlt automatisch den korrekten Modus basierend auf dem Build-Target aus.

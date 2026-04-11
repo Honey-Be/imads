@@ -71,6 +71,19 @@ Violating any of the following breaks the *reorderably deterministic* requiremen
 - Reducing duplicate candidates improves cache efficiency
 - Scores/priorities must be deterministic
 
+### 5.1) StratifiedSearch Contract
+
+`StratifiedSearch` is a built-in `SearchPolicy` that combines three candidate generation
+modes: coordinate step, directional search, and Halton quasi-random exploration.
+
+- The mode allocation ratio is determined by dimensionality at engine construction time
+  and must not change mid-run (doing so would break determinism)
+- Coordinate step must poll at most `min(dim, 6)` directions per iteration
+- Directional search must derive the improvement vector from the same deterministic
+  history window; it must not depend on wall-clock time or thread completion order
+- Halton points must use a deterministic sequence index tied to `env_rev`
+- All generated candidates must be quantized onto the mesh (same as any `SearchPolicy`)
+
 ---
 
 ## 5.5) Executor (Batch Runner) Contract
@@ -122,6 +135,43 @@ remaining Ready candidates **resume** in the next iteration.
 
 ---
 
+## 5.7) AnisotropicMeshGeometry Contract
+
+When `EngineConfig.mesh_base_steps` is `Some(steps)`, the engine uses per-dimension mesh
+step sizes instead of a single scalar step.
+
+- `base_steps.len()` must equal the search dimension; a mismatch is a configuration error
+- `mesh_muls` tracks per-dimension mesh multipliers independently
+- `SearchContext::mesh_steps` (plural) replaces the former scalar `mesh_step`
+  - The backward-compatible `mesh_step()` accessor returns `mesh_steps[0]`
+- All mesh quantization in search and poll must use the per-dimension step for the
+  corresponding coordinate
+- `env_rev_with_steps()` must include the `base_steps` vector in the cache key hash so
+  that different anisotropic configurations produce distinct cache keys
+- Poll/mesh update rules apply per-dimension: each dimension refines or coarsens its own
+  mesh multiplier independently
+
+---
+
+## 5.8) AcceptancePolicy Contract
+
+`AcceptancePolicy` is a public trait (previously sealed as `AcceptanceEngine`).
+`DefaultAcceptance` implements it and remains the default.
+
+- The acceptance policy receives TRUTH results only; it must never accept PARTIAL results
+- `AcceptancePolicy::accept(candidate, filter, barrier)` must return a deterministic
+  accept/reject decision given the same inputs
+- Custom implementations (e.g., Pareto-based for multi-objective) must satisfy:
+  - Filter dominance: a candidate is accepted only if it is not dominated by the current
+    filter contents (or improves the barrier)
+  - Barrier monotonicity: the progressive barrier threshold must not increase
+  - Determinism: the decision must not depend on wall-clock time, thread ordering, or
+    OS randomness
+- When a custom `AcceptancePolicy` changes its internal state (e.g., Pareto front
+  membership), `policy_rev` must be incremented
+
+---
+
 ## 6) DIDS Policy (DidsPolicy) Contract
 
 - `a` (assignment vector) is an **early-stop efficiency tool**
@@ -170,18 +220,19 @@ If you add a custom PolicyBundle, passing the following tests is strongly recomm
 
 ## 10) Customization Summary
 
-✅ Safe to customize
-- SchedulerPolicy / SearchPolicy / LadderPolicy / DidsPolicy
+Safe to customize:
+- SchedulerPolicy / SearchPolicy (incl. StratifiedSearch) / LadderPolicy / DidsPolicy
 - MarginPolicy / CalibratorPolicy / AuditPolicy
+- AcceptancePolicy (e.g., Pareto-based multi-objective)
 - CacheBackend / Telemetry
 
-⚠️ Conditional (advanced)
+Conditional (advanced):
 - Solver warm-start / solver internal stop-resume policies
 - Extending PARTIAL result usage scope (accepting is not recommended)
+- AnisotropicMeshGeometry (per-dimension steps via EngineConfig.mesh_base_steps)
 
-🚫 Sealed by default (convergence/correctness critical)
+Sealed by default (convergence/correctness critical):
 - Poll/mesh update rules
-- Filter/Barrier final accept/reject rules
 
 ## 7.4 Objective Pruning Contract
 

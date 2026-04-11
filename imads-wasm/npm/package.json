@@ -1,6 +1,6 @@
 {
   "name": "imads-wasm",
-  "version": "1.0.4",
+  "version": "2.0.0",
   "description": "IMADS — Integrated Mesh Adaptive Direct Search (WASM)",
   "license": "(MIT OR Apache-2.0 OR LGPL-2.1-or-later)",
   "type": "module",

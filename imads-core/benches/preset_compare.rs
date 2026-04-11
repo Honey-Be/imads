@@ -54,7 +54,7 @@ fn main() {
                 out.stats.cheap_rejects,
                 out.stats.invalid_eval_rejects,
                 hits,
-                out.f_best.unwrap_or(f64::NAN),
+                out.f_best.as_ref().map(|f| f[0]).unwrap_or(f64::NAN),
             );
         }
     }
@@ -77,7 +77,7 @@ fn main() {
             partial.push(out.stats.partial_steps as f64);
             cheap.push(out.stats.cheap_rejects as f64);
             invalid.push(out.stats.invalid_eval_rejects as f64);
-            best.push(out.f_best.unwrap_or(f64::NAN));
+            best.push(out.f_best.as_ref().map(|f| f[0]).unwrap_or(f64::NAN));
         }
         let mean = |xs: &[f64]| xs.iter().sum::<f64>() / xs.len() as f64;
         eprintln!(

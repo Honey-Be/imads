@@ -1,4 +1,7 @@
-use crate::types::{CandidateId, Env, MeshGeometry, XMesh, XReal, quantize_real_to_mesh};
+use crate::types::{
+    AnisotropicMeshGeometry, CandidateId, Env, MeshGeometry, XMesh, XReal,
+    quantize_real_to_aniso_mesh, quantize_real_to_mesh,
+};
 
 #[derive(Clone, Debug)]
 pub struct RawCandidate {
@@ -25,8 +28,18 @@ pub struct SearchContext {
     pub dim: usize,
     /// Incumbent point in continuous coordinates (base lattice scaled), if available.
     pub incumbent_x: Option<Vec<f64>>,
-    /// Current mesh step in continuous units (Δ = Δ₀ * mesh_mul).
-    pub mesh_step: f64,
+    /// Current mesh step per dimension in continuous units.
+    ///
+    /// For isotropic geometry this is a single-element vector broadcast from `Δ₀ * mesh_mul`.
+    /// For anisotropic geometry each element is `base_steps[i] * mesh_muls[i]`.
+    pub mesh_steps: Vec<f64>,
+}
+
+impl SearchContext {
+    /// Backward-compatible scalar mesh step (first element or 1.0).
+    pub fn mesh_step(&self) -> f64 {
+        self.mesh_steps.first().copied().unwrap_or(1.0)
+    }
 }
 
 /// Search policy. Safe to customize.
@@ -51,16 +64,16 @@ pub trait SearchPolicy: Send + Sync {
 
 /// Deterministic SplitMix64 PRNG (good enough for search jitter / exploration).
 #[derive(Clone, Debug)]
-struct SplitMix64 {
+pub(crate) struct SplitMix64 {
     state: u64,
 }
 
 impl SplitMix64 {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Self { state: seed }
     }
 
-    fn next_u64(&mut self) -> u64 {
+    pub(crate) fn next_u64(&mut self) -> u64 {
         // splitmix64
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
@@ -69,20 +82,20 @@ impl SplitMix64 {
         z ^ (z >> 31)
     }
 
-    fn next_f64(&mut self) -> f64 {
+    pub(crate) fn next_f64(&mut self) -> f64 {
         // Uniform in [0, 1).
         const DEN: f64 = 1.0 / ((1u64 << 53) as f64);
         let u = self.next_u64() >> 11;
         (u as f64) * DEN
     }
 
-    fn next_i64_range(&mut self, lo: i64, hi_exclusive: i64) -> i64 {
+    pub(crate) fn next_i64_range(&mut self, lo: i64, hi_exclusive: i64) -> i64 {
         debug_assert!(hi_exclusive > lo);
         let span = (hi_exclusive - lo) as u64;
         lo + (self.next_u64() % span) as i64
     }
 
-    fn next_sign(&mut self) -> f64 {
+    pub(crate) fn next_sign(&mut self) -> f64 {
         if (self.next_u64() & 1) == 0 {
             -1.0
         } else {
@@ -126,11 +139,8 @@ impl SearchPolicy for DefaultSearch {
 
     fn propose(&mut self, state: &SearchState, budget: usize) -> Vec<RawCandidate> {
         let dim = self.ctx.dim.max(1);
-        let step = if self.ctx.mesh_step.is_finite() && self.ctx.mesh_step > 0.0 {
-            self.ctx.mesh_step
-        } else {
-            1.0
-        };
+        let ms = self.ctx.mesh_step();
+        let step = if ms.is_finite() && ms > 0.0 { ms } else { 1.0 };
 
         let mut out = Vec::with_capacity(budget);
         for _ in 0..budget {
@@ -204,4 +214,10 @@ impl SearchPolicy for DefaultSearch {
 pub fn project_to_mesh(raw: &RawCandidate, geo: &MeshGeometry) -> XMesh {
     let xr = XReal::new(raw.x.clone().into_iter()).unwrap();
     quantize_real_to_mesh(&xr, geo)
+}
+
+/// Anisotropic variant of `project_to_mesh`.
+pub fn project_to_aniso_mesh(raw: &RawCandidate, geo: &AnisotropicMeshGeometry) -> XMesh {
+    let xr = XReal::new(raw.x.clone().into_iter()).unwrap();
+    quantize_real_to_aniso_mesh(&xr, geo)
 }

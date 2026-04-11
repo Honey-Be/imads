@@ -2,11 +2,16 @@
 
 Jede Sprache bietet eine **einheitliche API**, die auf allen unterstuetzten Zielplattformen identisch funktioniert.
 
-| Language | JVM (JNI) | JS (WASM) | Native (C FFI) |
-|----------|:---------:|:---------:|:--------------:|
+| Sprache | JVM (FFM) | JS (WASM) | Native (C FFI) |
+|---------|:---------:|:---------:|:--------------:|
 | **Kotlin** | `jvmMain` | `jsMain` | `nativeMain` |
 | **Scala 3** | `jvm/` | `js/` (Scala.js) | `native/` (Scala Native) |
 | **Clojure** | `clj/` | `cljs/` (ClojureScript) | — |
+
+> **Hinweis:** JVM-Ziele wurden von JNI (`imads-jni`, nun entfernt) auf **FFM**
+> (Foreign Function & Memory API, JDK 22+) migriert. Das `imads-jvm`-Crate stellt die FFM-Bridge
+> bereit. Bestehende nutzerseitige APIs bleiben unveraendert; nur der interne Binding-Mechanismus
+> wurde ersetzt.
 
 ## Architektur
 
@@ -17,8 +22,8 @@ Jede Sprache bietet eine **einheitliche API**, die auf allen unterstuetzten Ziel
            └───────┬───────────┬───────────┬──────────┘
                    │           │           │
             ┌──────┴──┐  ┌────┴────┐  ┌───┴───────┐
-            │ JVM/JNI │  │ JS/WASM │  │ Native/C  │
-            │ ImadsNative│ imads-wasm│  │ imads-ffi │
+            │ JVM/FFM │  │ JS/WASM │  │ Native/C  │
+            │imads-jvm│  │imads-wasm│  │ imads-ffi │
             └──────┬──┘  └────┬────┘  └───┬───────┘
                    └──────────┴────────────┘
                          imads-core (Rust)
@@ -27,15 +32,33 @@ Jede Sprache bietet eine **einheitliche API**, die auf allen unterstuetzten Ziel
 ## Native Libraries erstellen
 
 ```bash
-# JNI shared library (JVM targets)
-cargo build -p imads-jni --release
+# FFM shared library (JVM-Ziele — erfordert JDK 22+)
+cargo build -p imads-ffi --release
+
+# Compile FFM Java bridge
+javac -d imads-jvm/target imads-jvm/src/main/java/io/imads/*.java
 
 # C static/shared library (Kotlin/Native, Scala Native)
 cargo build -p imads-ffi --release
 
-# WASM module (JS targets)
-cd imads-wasm && wasm-pack build --target web --release
+# WASM module (JS-Ziele)
+cd imads-wasm && cargo component build --release
 ```
+
+## JVM-FFM-Anforderungen
+
+Die FFM-API erfordert **JDK 22 oder hoeher**. Zur Laufzeit muss die JVM die
+`libimads_ffi`-Shared-Library finden koennen:
+
+```bash
+# Library-Pfad beim Start uebergeben
+java -Djava.library.path=target/release -cp imads-jvm/target your.MainClass
+
+# Oder LD_LIBRARY_PATH / DYLD_LIBRARY_PATH setzen
+export LD_LIBRARY_PATH=$PWD/target/release:$LD_LIBRARY_PATH
+```
+
+FFM ersetzt JNI vollstaendig. Das `imads-jni`-Crate wurde entfernt.
 
 ---
 
@@ -79,7 +102,7 @@ imads-kotlin/src/
 ├── commonMain/kotlin/io/imads/    # expect declarations + shared types
 │   ├── ImadsTypes.kt              # ImadsEnv, ImadsOutput, ImadsEvaluator
 │   └── ImadsEngine.kt             # expect ImadsConfig, expect ImadsEngine, imadsRun()
-├── jvmMain/kotlin/io/imads/       # actual via JNI (ImadsNative)
+├── jvmMain/kotlin/io/imads/       # actual via FFM (imads-jvm, JDK 22+)
 │   └── ImadsEngine.jvm.kt
 ├── jsMain/kotlin/io/imads/        # actual via imads-wasm
 │   └── ImadsEngine.js.kt
@@ -126,7 +149,7 @@ imads-scala/
 │   ├── Types.scala                     # Env, Output case classes
 │   ├── Evaluator.scala                 # Evaluator trait
 │   └── Imads.scala                     # Imads object + ImadsPlatformOps trait
-├── jvm/src/main/scala/io/imads/       # ImadsPlatform via JNI
+├── jvm/src/main/scala/io/imads/       # ImadsPlatform via FFM (JDK 22+)
 │   └── ImadsPlatform.scala
 ├── js/src/main/scala/io/imads/        # ImadsPlatform via Scala.js → WASM
 │   └── ImadsPlatform.scala
@@ -173,7 +196,7 @@ Projekt: `imads-clj/`
 ```
 imads-clj/src/
 ├── cljc/imads/core.cljc       # Shared API (reader conditionals for platform dispatch)
-├── clj/imads/platform.clj     # JVM backend via JNI (ImadsNative)
+├── clj/imads/platform.clj     # JVM backend via FFM (imads-jvm, JDK 22+)
 └── cljs/imads/platform.cljs   # JS backend via WASM (imads-wasm)
 ```
 

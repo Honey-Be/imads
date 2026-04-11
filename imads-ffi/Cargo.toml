@@ -1,11 +1,17 @@
 [package]
 name = "imads-ffi"
-version = "1.0.4"
+version = "2.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0 OR LGPL-2.1-or-later"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+default = ["fixed-n3"]
+fixed-n3 = []
+fixed-n8 = ["fixed-n3"]
 
 [dependencies]
 imads-core = { path = "../imads-core" }
+paste = "1"

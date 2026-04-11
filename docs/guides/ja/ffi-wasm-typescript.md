@@ -1,54 +1,65 @@
 # WASM / TypeScript FFI ガイド
 
-## npm パッケージ: `imads-wasm`
+## WASI コンポーネントモデル
 
-WASM バインディングは、3つのビルドターゲットを持つ単一の npm パッケージとして配布されます。
+`imads-wasm` クレートは、`wit-bindgen` を使用した **WASI コンポーネントモデル**を使用するように
+書き換えられました。以前の `wasm-bindgen` ベースのアプローチを置き換えます。WIT
+（WebAssembly Interface Type）インターフェースが、ホストとコンポーネント間の契約を定義します。
 
-| Target | Use case | `init()` needed? | Module format |
-|--------|----------|:-----------------:|:-------------:|
-| `bundler` | Webpack 5+, Vite, Rollup | No | ESM |
-| `web` | `<script type="module">` | Yes (`await init()`) | ESM |
-| `nodejs` | Node.js without bundler | No | CJS |
+### WIT インターフェース
 
-### package.json exports
+WIT インターフェースは `imads-wasm/wit/imads.wit` で定義されており、以下を公開します:
+
+- エンジンの作成とライフサイクル
+- プリセットからの設定
+- 単目的および多目的の `run` 関数
+- カスタム evaluator コールバック
+
+### ビルド
+
+```bash
+# WASI コンポーネントのビルド（cargo-component が必要）
+cd imads-wasm && cargo component build --release
+```
+
+`target/wasm32-wasip2/release/` に `.wasm` コンポーネントが生成されます。
+
+### JavaScript/TypeScript バインディングの生成
+
+`jco` を使用してコンポーネントを JavaScript/TypeScript モジュールにトランスパイルします:
+
+```bash
+# jco のインストール（未インストールの場合）
+npm install -g @bytecodealliance/jco
+
+# JS/TS へのトランスパイル
+jco transpile target/wasm32-wasip2/release/imads_wasm.wasm \
+    --out-dir npm/dist \
+    --map 'imads:core/*=./imads-*.js'
+```
+
+以下が生成されます:
+- `npm/dist/imads_wasm.js` — すべてのエクスポートを含む ES モジュール
+- `npm/dist/imads_wasm.d.ts` — TypeScript 型宣言
+- `npm/dist/*.wasm` — コアモジュール
+
+### npm パッケージ: `imads-wasm`
+
+トランスパイルされた出力は、標準の npm パッケージとして配布されます:
 
 ```jsonc
 {
   "exports": {
-    ".":         { "import": "./bundler/...", "require": "./nodejs/..." },
-    "./web":     { "import": "./web/..." },
-    "./bundler": { "import": "./bundler/..." },
-    "./nodejs":  { "require": "./nodejs/..." }
+    ".": { "import": "./dist/imads_wasm.js", "types": "./dist/imads_wasm.d.ts" }
   }
 }
 ```
 
-`package.json` exports をサポートするバンドラー（Webpack 5+、Vite、`@rollup/plugin-node-resolve` を使用した Rollup）は、自動的に `bundler` ターゲットを選択します。
-
-## ビルド
-
-```bash
-# All three targets (recommended)
-make wasm-npm
-
-# Individual targets
-make wasm-bundler    # for bundlers (Webpack, Vite)
-make wasm-web        # for direct browser use
-make wasm-nodejs     # for Node.js
-
-# Or use the script directly
-cd imads-wasm && ./build-npm.sh
-```
-
-出力先: `imads-wasm/npm/` 内の `bundler/`、`web/`、`nodejs/` サブディレクトリです。
-
-## 環境別の使い方
+## 使い方
 
 ### バンドラーを使用する場合（Webpack 5+、Vite）
 
 ```typescript
-// Bundler resolves "imads-wasm" → npm/bundler/imads_wasm.js
-// .wasm file is loaded automatically by the bundler — no init() needed
 import { Engine, EngineConfig, Env } from "imads-wasm";
 
 const cfg = EngineConfig.fromPreset("balanced");
@@ -73,49 +84,28 @@ import wasm from "vite-plugin-wasm";
 export default { plugins: [wasm()] };
 ```
 
-### バンドラーなしの場合（ブラウザ）
-
-```html
-<script type="module">
-  // Use the ./web subpath export
-  import init, { Engine, EngineConfig, Env } from "imads-wasm/web";
-
-  await init();  // must call init() first
-  const cfg = EngineConfig.fromPreset("balanced");
-  const output = new Engine().run(cfg, new Env(1, 2, 3, 4));
-  console.log(output.fBest);
-</script>
-```
-
-### Node.js
+### Node.js (ESM)
 
 ```javascript
-// CommonJS — uses ./nodejs subpath
-const { Engine, EngineConfig, Env } = require("imads-wasm/nodejs");
+import { Engine, EngineConfig, Env } from "imads-wasm";
 
 const cfg = EngineConfig.fromPreset("balanced");
 const output = new Engine().run(cfg, new Env(1, 2, 3, 4));
 console.log(output.fBest);
 ```
 
-### Node.js での ESM
-
-```javascript
-// Uses the default export (bundler target, works with Node 18+ ESM)
-import { Engine, EngineConfig, Env } from "imads-wasm";
-```
+ESM サポート付きの Node.js 18+ が必要です。コンポーネントは標準の ESM import を介してロードされます。
 
 ## フレームワークバインディングからの使用
 
-| Framework | Import style | Target used |
-|-----------|-------------|:-----------:|
-| **Kotlin/JS** | `@JsModule("imads-wasm")` | `bundler` |
-| **Scala.js** | `@JSImport("imads-wasm", Namespace)` | `bundler` |
-| **ClojureScript** | `(:require ["imads-wasm" :as wasm])` | `bundler` |
-| **TypeScript** (bundler) | `import { ... } from "imads-wasm"` | `bundler` |
-| **TypeScript** (browser) | `import init, { ... } from "imads-wasm/web"` | `web` |
+| Framework | Import style | 備考 |
+|-----------|-------------|:-----:|
+| **Kotlin/JS** | `@JsModule("imads-wasm")` | バンドラー経由 |
+| **Scala.js** | `@JSImport("imads-wasm", Namespace)` | バンドラー経由 |
+| **ClojureScript** | `(:require ["imads-wasm" :as wasm])` | バンドラー経由 |
+| **TypeScript** (バンドラー) | `import { ... } from "imads-wasm"` | バンドラー |
 
-すべての JS ターゲットフレームワークバインディング（Kotlin/JS、Scala.js、CLJS）は `bundler` ターゲットを前提としています。
+すべての JS ターゲットフレームワークバインディング（Kotlin/JS、Scala.js、CLJS）はバンドラーの存在を前提としています。
 それぞれのビルドツール（Gradle+Webpack、sbt+Scala.js linker、shadow-cljs）がバンドラーとして機能します。
 
 ## カスタム Evaluator
@@ -138,21 +128,24 @@ function searchDim(): number | undefined {
 const output = engine.runWithEvaluator(cfg, env, mcSample, 2, cheapConstraints, searchDim);
 ```
 
-## WASI 向けビルド（スレッド対応）
+## WASI ターゲット向けビルド
 
 ```bash
-cargo build -p imads-wasm --target wasm32-wasip1 --release          # single-threaded
-cargo build -p imads-wasm --target wasm32-wasip1-threads --release  # multi-threaded
-cargo build -p imads-wasm --target wasm32-wasip3 --release          # component model
+# コンポーネントモデル（推奨）
+cargo component build -p imads-wasm --release
+
+# レガシー WASI ターゲット（引き続きサポート）
+cargo build -p imads-wasm --target wasm32-wasip1 --release          # シングルスレッド
+cargo build -p imads-wasm --target wasm32-wasip1-threads --release  # マルチスレッド
 ```
 
 ## スレッディングモデル
 
-| Target | Workers | Notes |
+| Target | Workers | 備考 |
 |--------|---------|-------|
-| `wasm32-unknown-unknown` (browser) | 1 only | No `std::thread` |
-| `wasm32-wasip1` | 1 only | No thread support |
-| `wasm32-wasip1-threads` | N | Full thread pool |
-| `wasm32-wasip3` | N | Component model + threads |
+| `wasm32-wasip2` (コンポーネント) | N | コンポーネントモデル + スレッド |
+| `wasm32-wasip1` | 1 のみ | スレッドサポートなし |
+| `wasm32-wasip1-threads` | N | フルスレッドプール |
+| `wasm32-unknown-unknown` (ブラウザ) | 1 のみ | `std::thread` なし |
 
 `AdaptiveExecutor` はビルドターゲットに基づいて、正しいモードを自動的に選択します。

@@ -109,6 +109,187 @@ pub fn quantize_real_to_mesh(x: &XReal, geo: &MeshGeometry) -> XMesh {
     XMesh(out)
 }
 
+// --------------------------------
+// Multi-objective support
+// --------------------------------
+
+/// Trait for objective function value containers.
+///
+/// Enables single-objective (`f64`), fixed multi-objective (`[f64; N]`),
+/// and dynamic multi-objective (`Vec<f64>`) through a unified interface.
+pub trait ObjectiveValues: Sized + Clone + Send + Sync + std::fmt::Debug {
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn get(&self, i: usize) -> Option<f64>;
+    /// Primary objective value (index 0). Used for single-objective compatibility.
+    fn primary(&self) -> f64 {
+        self.get(0).unwrap_or(f64::INFINITY)
+    }
+    fn as_slice(&self) -> &[f64];
+    /// Convert to a Vec for internal engine use (avoids pervasive generics).
+    fn to_vec(&self) -> Vec<f64> {
+        self.as_slice().to_vec()
+    }
+}
+
+impl ObjectiveValues for f64 {
+    fn len(&self) -> usize {
+        1
+    }
+    fn get(&self, i: usize) -> Option<f64> {
+        if i == 0 { Some(*self) } else { None }
+    }
+    fn primary(&self) -> f64 {
+        *self
+    }
+    fn as_slice(&self) -> &[f64] {
+        std::slice::from_ref(self)
+    }
+    fn to_vec(&self) -> Vec<f64> {
+        vec![*self]
+    }
+}
+
+impl ObjectiveValues for Vec<f64> {
+    fn len(&self) -> usize {
+        Vec::len(self)
+    }
+    fn get(&self, i: usize) -> Option<f64> {
+        self.as_slice().get(i).copied()
+    }
+    fn as_slice(&self) -> &[f64] {
+        self
+    }
+}
+
+macro_rules! impl_objective_values_array {
+    ($($n:literal),*) => {
+        $(
+            impl ObjectiveValues for [f64; $n] {
+                fn len(&self) -> usize { $n }
+                fn get(&self, i: usize) -> Option<f64> {
+                    if i < $n { Some(self[i]) } else { None }
+                }
+                fn as_slice(&self) -> &[f64] { &self[..] }
+            }
+        )*
+    };
+}
+
+impl_objective_values_array!(1, 2, 3, 4, 5, 6, 7, 8);
+
+/// Per-dimension (anisotropic) mesh geometry.
+///
+/// Each dimension has its own `base_step`, while `mesh_muls` are refined uniformly
+/// to preserve nested mesh structure. The absolute step for dimension `i` is
+/// `base_steps[i] * mesh_muls[i]`.
+#[derive(Clone, Debug)]
+pub struct AnisotropicMeshGeometry {
+    pub base_steps: Vec<f64>,
+    pub mesh_muls: Vec<i64>,
+    pub mesh_mul_min: i64,
+    pub refine_div: i64,
+    pub poll_step_mult: i64,
+}
+
+impl AnisotropicMeshGeometry {
+    /// Current step per dimension in continuous units.
+    pub fn current_steps(&self) -> Vec<f64> {
+        self.base_steps
+            .iter()
+            .zip(&self.mesh_muls)
+            .map(|(&bs, &mm)| bs * (mm as f64))
+            .collect()
+    }
+
+    /// Scalar current step (maximum across dimensions). Useful for search policies.
+    pub fn current_step_max(&self) -> f64 {
+        self.current_steps()
+            .into_iter()
+            .fold(0.0f64, f64::max)
+    }
+
+    /// Refine (shrink) all mesh multipliers uniformly by integer division.
+    pub fn refine(&mut self) {
+        let div = self.refine_div.max(2);
+        let minm = self.mesh_mul_min.max(1);
+        for mm in &mut self.mesh_muls {
+            if *mm > minm {
+                let next = *mm / div;
+                *mm = next.max(minm);
+            }
+        }
+    }
+
+    /// Poll step in base-lattice units per dimension.
+    pub fn poll_step_units(&self) -> Vec<i64> {
+        let mult = self.poll_step_mult.max(1);
+        self.mesh_muls.iter().map(|&mm| mm * mult).collect()
+    }
+
+    /// Dimension count.
+    pub fn dim(&self) -> usize {
+        self.base_steps.len()
+    }
+}
+
+/// Convert an isotropic `MeshGeometry` into `AnisotropicMeshGeometry` by broadcasting
+/// the scalar values to `dim` dimensions.
+impl MeshGeometry {
+    pub fn to_anisotropic(&self, dim: usize) -> AnisotropicMeshGeometry {
+        AnisotropicMeshGeometry {
+            base_steps: vec![self.base_step; dim],
+            mesh_muls: vec![self.mesh_mul; dim],
+            mesh_mul_min: self.mesh_mul_min,
+            refine_div: self.refine_div,
+            poll_step_mult: self.poll_step_mult,
+        }
+    }
+}
+
+/// Map a canonical mesh point into continuous space with per-dimension base steps.
+pub fn mesh_to_real_aniso(x: &XMesh, base_steps: &[f64]) -> Result<XReal, InvalidNumber> {
+    XReal::new(
+        x.0.iter()
+            .zip(base_steps)
+            .map(|(&u, &bs)| (u as f64) * bs),
+    )
+}
+
+/// Quantize a continuous point onto the current anisotropic mesh.
+///
+/// Each dimension is quantized independently using its own `base_step` and `mesh_mul`.
+pub fn quantize_real_to_aniso_mesh(x: &XReal, geo: &AnisotropicMeshGeometry) -> XMesh {
+    let mut out = Vec::with_capacity(x.0.len());
+    for (i, &xi) in x.0.iter().enumerate() {
+        let bs = geo.base_steps[i];
+        let mm = geo.mesh_muls[i].max(1);
+        let inv = 1.0 / bs;
+        let z = f64::from(xi) * inv;
+        let q = (z / (mm as f64)).round();
+        let zi = (q as i64) * mm;
+        out.push(zi);
+    }
+    XMesh(out)
+}
+
+/// Compute environment revision including per-dimension base steps.
+///
+/// This ensures cache keys are invalidated when anisotropic geometry changes.
+pub fn env_rev_with_steps(env: &Env, base_steps: &[f64]) -> EnvRev {
+    let mut h = Fnv1aHasher::new();
+    env.run_id.hash(&mut h);
+    env.config_hash.hash(&mut h);
+    env.data_snapshot_id.hash(&mut h);
+    env.rng_master_seed.hash(&mut h);
+    for &s in base_steps {
+        s.to_bits().hash(&mut h);
+    }
+    EnvRev(h.finish() as u128)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Tau(pub u64);
 
@@ -146,8 +327,10 @@ pub struct EvalMeta {
 
 #[derive(Clone, Debug)]
 pub struct Estimates {
-    pub f_hat: f64,
-    pub f_se: f64,
+    /// Objective estimate(s). Single-objective: `vec![f]`. Multi-objective: `vec![f0, f1, ...]`.
+    pub f_hat: Vec<f64>,
+    /// Objective standard error(s), same length as `f_hat`.
+    pub f_se: Vec<f64>,
     pub c_hat: Vec<f64>,
     pub c_se: Vec<f64>,
     /// Exact fidelity bucket that produced this estimate.
@@ -159,6 +342,19 @@ pub struct Estimates {
     ///
     /// In the default margin policy, the effective bias bound is `K * tau_scale`.
     pub tau_scale: f64,
+    /// Number of objectives (for convenience).
+    pub num_objectives: usize,
+}
+
+impl Estimates {
+    /// Primary objective estimate (index 0). Backward-compatible accessor.
+    pub fn f_hat_primary(&self) -> f64 {
+        self.f_hat.first().copied().unwrap_or(f64::INFINITY)
+    }
+    /// Primary objective SE (index 0).
+    pub fn f_se_primary(&self) -> f64 {
+        self.f_se.first().copied().unwrap_or(0.0)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -182,7 +378,8 @@ pub enum JobResult {
     },
 
     Truth {
-        f: f64,
+        /// Objective value(s). Single-objective: `vec![f]`.
+        f: Vec<f64>,
         c: Vec<f64>,
         feasible: bool,
         v: f64,

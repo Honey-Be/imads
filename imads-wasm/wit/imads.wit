@@ -1,0 +1,40 @@
+package honey-be:imads;
+
+interface types {
+    record env {
+        run-id: u64,
+        config-hash: u64,
+        data-snapshot-id: u64,
+        rng-master-seed: u64,
+    }
+
+    record stats {
+        truth-evals: u64,
+        partial-steps: u64,
+        cheap-rejects: u64,
+        invalid-eval-rejects: u64,
+    }
+
+    record output {
+        f-best: option<list<f64>>,
+        x-best: option<list<s64>>,
+        stats: stats,
+    }
+
+    enum preset {
+        legacy-baseline,
+        balanced,
+        conservative,
+        throughput,
+    }
+}
+
+interface engine {
+    use types.{env, output, preset};
+
+    run: func(preset: preset, env: env, workers: u32) -> output;
+}
+
+world imads {
+    export engine;
+}

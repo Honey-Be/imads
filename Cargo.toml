@@ -1,3 +1,3 @@
 [workspace]
-members = ["imads-core", "imads-ffi", "imads-jni", "imads-py", "imads-wasm"]
+members = ["imads-core", "imads-ffi", "imads-jvm", "imads-py", "imads-wasm"]
 resolver = "3"

@@ -98,8 +98,10 @@ impl MarginPolicy for DefaultMargin {
         let z_l = z_for(self.alpha_f());
         let z_u = z_for(self.beta_f());
         let k_f = th.k_f_for(est.phi);
-        let lcb = est.f_hat - z_l * est.f_se - k_f * est.tau_scale;
-        let ucb = est.f_hat + z_u * est.f_se + k_f * est.tau_scale;
+        let f_hat = est.f_hat_primary();
+        let f_se = est.f_se_primary();
+        let lcb = f_hat - z_l * f_se - k_f * est.tau_scale;
+        let ucb = f_hat + z_u * f_se + k_f * est.tau_scale;
         (lcb, ucb)
     }
 }

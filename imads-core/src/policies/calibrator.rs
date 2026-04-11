@@ -707,18 +707,20 @@ impl DeltaKCalibrator {
         }
     }
 
-    fn truth_as_estimates(phi: Phi, f: f64, c: &[f64], m: usize) -> Estimates {
+    fn truth_as_estimates(phi: Phi, f: &[f64], c: &[f64], m: usize) -> Estimates {
         let mut c_hat = vec![0.0; m];
         for (j, ch) in c_hat.iter_mut().enumerate() {
             *ch = c.get(j).copied().unwrap_or(0.0);
         }
+        let num_objectives = f.len();
         Estimates {
-            f_hat: f,
-            f_se: 0.0,
+            f_hat: f.to_vec(),
+            f_se: vec![0.0; num_objectives],
             c_hat,
             c_se: vec![0.0; m],
             phi,
             tau_scale: phi.tau.0 as f64,
+            num_objectives,
         }
     }
 
@@ -739,7 +741,7 @@ impl DeltaKCalibrator {
             smc: loose_phi.smc,
         };
 
-        let df = (loose_est.f_hat - tight_est.f_hat).max(0.0) / dtau;
+        let df = (loose_est.f_hat_primary() - tight_est.f_hat_primary()).max(0.0) / dtau;
         Self::push_k_sample(&mut self.k_samples_f, df, self.k_window);
         Self::push_k_sample(
             self.k_phi_samples_f.entry(loose_phi).or_default(),
@@ -781,7 +783,7 @@ impl DeltaKCalibrator {
         truth_est: &Estimates,
     ) {
         let tau_scale = (cut_phi.tau.0 as f64).max(1.0);
-        let df = (cut_est.f_hat - truth_est.f_hat).max(0.0) / tau_scale;
+        let df = (cut_est.f_hat_primary() - truth_est.f_hat_primary()).max(0.0) / tau_scale;
         Self::push_k_sample(&mut self.k_samples_f, df, self.k_window);
         Self::push_k_sample(
             self.k_phi_samples_f.entry(cut_phi).or_default(),
@@ -1060,7 +1062,7 @@ impl CalibratorPolicy for DeltaKCalibrator {
                         }
 
                         let truth_est =
-                            Self::truth_as_estimates(meta.phi, *f, c, self.state.k_c.len());
+                            Self::truth_as_estimates(meta.phi, f, c, self.state.k_c.len());
 
                         let mut checkpoints: Vec<(Phi, Estimates)> = Vec::new();
                         checkpoints.push((pending.audit_of.phi_at_cut, pending.est_at_cut.clone()));

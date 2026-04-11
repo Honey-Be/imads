@@ -4,9 +4,8 @@
 
 # Paths / tools
 CBINDGEN   ?= $(HOME)/.cargo/bin/cbindgen
-JNI_JAVA   := imads-jni/java/src/main/java/io/imads
-JNI_CLS    := imads-jni/java/target
-WASM_NPM   := imads-wasm/npm
+JVM_KOTLIN := imads-jvm/kotlin
+WASM_OUT   := imads-wasm/pkg
 
 # ──── Core (Rust workspace) ──────────────────
 
@@ -29,7 +28,7 @@ doc:
 
 # ──── Release builds ─────────────────────────
 
-.PHONY: build-core build-ffi build-jni build-py build-wasm build-all
+.PHONY: build-core build-ffi build-jvm build-py build-wasm build-all
 
 build-core:
 	cargo build -p imads-core --release
@@ -37,31 +36,26 @@ build-core:
 build-ffi: build-core
 	cargo build -p imads-ffi --release
 
-build-jni: build-core
-	cargo build -p imads-jni --release
+build-jvm: build-core
+	cargo build -p imads-jvm --release
 
 build-py: build-core
 	cargo build -p imads-py --release
 
 build-wasm: build-core
-	cargo build -p imads-wasm --release
+	cargo component build -p imads-wasm --release
 
-build-all: build-ffi build-jni build-py build-wasm
+build-all: build-ffi build-jvm build-py build-wasm
 
 # ──── FFI artifacts ──────────────────────────
 
-.PHONY: cbindgen java-bridge py-wheel py-develop \
-        wasm-bundler wasm-web wasm-nodejs wasm-npm ffi-all
+.PHONY: cbindgen py-wheel py-develop \
+        wasm-component wasm-transpile ffi-all
 
 ## Regenerate C header from imads-ffi
 cbindgen: build-ffi
 	$(CBINDGEN) --config imads-ffi/cbindgen.toml --crate imads-ffi \
 		--output imads-ffi/include/imads.h
-
-## Compile JNI Java bridge classes
-java-bridge: build-jni
-	mkdir -p $(JNI_CLS)
-	javac -d $(JNI_CLS) $(JNI_JAVA)/*.java
 
 ## Build Python wheel (CPython, via maturin)
 py-wheel:
@@ -71,35 +65,27 @@ py-wheel:
 py-develop:
 	cd imads-py && maturin develop --release
 
-## ---- WASM targets ----
+## ---- WASM targets (Component Model) ----
 
-## Build WASM for bundlers (Webpack 5+, Vite, Rollup+plugin).
-## Primary target for Kotlin/JS, Scala.js, ClojureScript, and TS/JS with bundlers.
-## No init() required — bundler handles .wasm loading.
-wasm-bundler:
-	cd imads-wasm && wasm-pack build --target bundler --release \
-		--out-dir $(CURDIR)/$(WASM_NPM)/bundler --out-name imads_wasm
-	rm -f $(WASM_NPM)/bundler/package.json $(WASM_NPM)/bundler/.gitignore
+## Build WASM component (wasm32-wasip2)
+wasm-component: build-wasm
 
-## Build WASM for direct browser use (ESM, requires await init()).
-## For <script type="module"> without a bundler.
-wasm-web:
-	cd imads-wasm && wasm-pack build --target web --release \
-		--out-dir $(CURDIR)/$(WASM_NPM)/web --out-name imads_wasm
-	rm -f $(WASM_NPM)/web/package.json $(WASM_NPM)/web/.gitignore
-
-## Build WASM for Node.js (CommonJS, synchronous).
-## For Node.js without a bundler.
-wasm-nodejs:
-	cd imads-wasm && wasm-pack build --target nodejs --release \
-		--out-dir $(CURDIR)/$(WASM_NPM)/nodejs --out-name imads_wasm
-	rm -f $(WASM_NPM)/nodejs/package.json $(WASM_NPM)/nodejs/.gitignore
-
-## Build all WASM targets and assemble the npm package.
-wasm-npm: wasm-bundler wasm-web wasm-nodejs
+## Transpile WASM component to ESM for Node.js/Deno/Bun
+wasm-transpile: wasm-component
+	mkdir -p $(WASM_OUT)/esm
+	jco transpile target/wasm32-wasip2/release/imads_wasm.wasm \
+		-o $(WASM_OUT)/esm
 
 ## All FFI artifacts
-ffi-all: cbindgen java-bridge wasm-npm
+ffi-all: cbindgen build-jvm wasm-transpile
+
+# ──── JVM (FFM, JDK 22+) ────────────────────
+
+.PHONY: jvm-kotlin
+
+## Build Kotlin JVM wrapper (requires JDK 22+)
+jvm-kotlin: build-jvm
+	cd $(JVM_KOTLIN) && ./gradlew build
 
 # ──── Benchmarks ─────────────────────────────
 
@@ -124,6 +110,5 @@ clean:
 
 ## Remove everything including generated FFI artifacts
 clean-all: clean
-	rm -rf $(JNI_CLS)
-	rm -rf $(WASM_NPM)/bundler $(WASM_NPM)/web $(WASM_NPM)/nodejs
-	rm -rf imads-wasm/pkg
+	rm -rf $(WASM_OUT)
+	rm -rf imads-ffi/include/imads.h

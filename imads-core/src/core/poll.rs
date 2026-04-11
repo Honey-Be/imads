@@ -36,4 +36,24 @@ impl DefaultPoll {
         }
         out
     }
+
+    /// Generate axis-aligned poll points with per-dimension steps.
+    pub fn generate_points_aniso(
+        center: &crate::types::XMesh,
+        steps: &[i64],
+    ) -> Vec<crate::types::XMesh> {
+        let n = center.0.len();
+        let mut out = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let s = steps.get(i).copied().unwrap_or(1).max(1);
+            let mut xp = center.0.clone();
+            xp[i] = xp[i].saturating_add(s);
+            out.push(crate::types::XMesh(xp));
+
+            let mut xm = center.0.clone();
+            xm[i] = xm[i].saturating_sub(s);
+            out.push(crate::types::XMesh(xm));
+        }
+        out
+    }
 }

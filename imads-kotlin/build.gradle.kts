@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "io.imads"
-version = "1.0.4"
+version = "2.0.0"
 
 kotlin {
     jvm()

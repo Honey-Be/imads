@@ -7,6 +7,7 @@ pub mod ladder;
 pub mod margin;
 pub mod scheduler;
 pub mod search;
+pub mod stratified_search;
 
 pub use audit::*;
 pub use calibrator::*;
@@ -15,3 +16,4 @@ pub use ladder::*;
 pub use margin::*;
 pub use scheduler::*;
 pub use search::*;
+pub use stratified_search::StratifiedSearch;

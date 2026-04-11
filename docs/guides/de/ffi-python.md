@@ -5,9 +5,9 @@ Das Python-Paket `imads` bietet eine **einheitliche API**, die sowohl auf CPytho
 | Runtime | Backend | Vorgehensweise |
 |---------|---------|-----|
 | **CPython** | PyO3 native extension (`_imads.so`) | `maturin develop` |
-| **GraalPython** | Java interop → JNI (`libimads_jni`) | `java.library.path` + classpath |
+| **GraalPython** | Java interop → FFM (`imads-jvm`) | JDK 22+, `java.library.path` |
 
-Das passende Backend wird beim Import automatisch ausgewählt.
+Das passende Backend wird beim Import automatisch ausgewaehlt.
 
 ## Installation
 
@@ -23,16 +23,16 @@ maturin develop --release
 ### GraalPython
 
 ```bash
-# Build JNI native library
-cargo build -p imads-jni --release
+# Build native library (shared)
+cargo build -p imads-ffi --release
 
-# Compile Java bridge
-javac -d imads-jni/java/target imads-jni/java/src/main/java/io/imads/*.java
+# Compile FFM Java bridge (requires JDK 22+)
+javac -d imads-jvm/target imads-jvm/src/main/java/io/imads/*.java
 
 # Run with GraalPython
 graalpy --jvm \
     --vm.Djava.library.path=target/release \
-    --vm.cp=imads-jni/java/target \
+    --vm.cp=imads-jvm/target \
     your_script.py
 ```
 
@@ -74,19 +74,48 @@ evaluator = MyEvaluator()
 output = engine.run(cfg, env, workers=4, evaluator=evaluator, num_constraints=2)
 ```
 
-> **Hinweis:** `search_dim()` ist optional. Wenn der Evaluator es bereitstellt, erkennt die Engine die Suchraum-Dimensionalität automatisch. Wenn weggelassen, greift die Engine auf `EngineConfig.search_dim` (falls gesetzt) oder die Länge des Incumbents zurück. Presets verwenden jetzt standardmäßig `search_dim=None` und erwarten, dass der Evaluator dies bereitstellt.
+> **Hinweis:** `search_dim()` ist optional. Wenn der Evaluator es bereitstellt, erkennt die Engine die Suchraum-Dimensionalitaet automatisch. Wenn weggelassen, greift die Engine auf `EngineConfig.search_dim` (falls gesetzt) oder die Laenge des Incumbents zurueck. Presets verwenden jetzt standardmaessig `search_dim=None` und erwarten, dass der Evaluator dies bereitstellt.
+
+## Multi-Objective Evaluator
+
+Fuer Multi-Objective-Optimierung geben Sie eine Liste von Zielfunktionswerten anstelle eines
+einzelnen Float zurueck:
+
+```python
+class MyMultiEvaluator:
+    def mc_sample(self, x: list[float], tau: int, smc: int, k: int) -> tuple[list[float], list[float]]:
+        f1 = sum(xi ** 2 for xi in x)
+        f2 = sum((xi - 1) ** 2 for xi in x)
+        c = [sum(x) - 1.0]
+        return [f1, f2], c
+
+    def num_objectives(self) -> int:
+        return 2
+
+evaluator = MyMultiEvaluator()
+output = engine.run(cfg, env, workers=4, evaluator=evaluator, num_constraints=1)
+
+# Access all objective values for the best solution
+print(output.f_best_all)   # e.g. [0.123, 0.456]
+print(output.f_best)       # first objective (backward compat): 0.123
+print(output.num_objectives)  # 2
+```
+
+`output.f_best_all` gibt den vollstaendigen `Vec<f64>` der besten Zielfunktionswerte zurueck.
+`output.f_best` bleibt als komfortabler Accessor fuer die erste Zielfunktion verfuegbar.
+`output.num_objectives` gibt die Anzahl der Zielfunktionen an.
 
 ## Architektur
 
 ```
 imads/__init__.py          ← erkennt die Runtime automatisch
 ├── imads/_cpython.py      ← wraps PyO3 _imads native extension
-└── imads/_graalpy.py      ← wraps JNI via GraalPython java interop
+└── imads/_graalpy.py      ← wraps FFM ueber GraalPython java interop (JDK 22+)
 ```
 
 ## Hinweise zur Performance
 
-- **CPython**: Jeder `mc_sample`-Aufruf überquert die Python/Rust-Grenze über den GIL.
-- **GraalPython**: Jeder `mc_sample`-Aufruf überquert die Python/Java/Rust-Grenze.
+- **CPython**: Jeder `mc_sample`-Aufruf ueberquert die Python/Rust-Grenze ueber den GIL.
+- **GraalPython**: Jeder `mc_sample`-Aufruf ueberquert die Python/Java/Rust-Grenze ueber FFM.
 - Halten Sie bei rechenintensiven Evaluatoren die Python-Seite schlank.
-- Die Multi-Worker-Ausführung parallelisiert zwischen GIL/JVM-Akquisitionen.
+- Die Multi-Worker-Ausfuehrung parallelisiert zwischen GIL/JVM-Akquisitionen.

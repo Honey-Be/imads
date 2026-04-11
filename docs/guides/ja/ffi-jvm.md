@@ -2,11 +2,16 @@
 
 各言語は、すべてのサポート対象ターゲットで同一に動作する**単一の統一 API** を提供します。
 
-| Language | JVM (JNI) | JS (WASM) | Native (C FFI) |
+| Language | JVM (FFM) | JS (WASM) | Native (C FFI) |
 |----------|:---------:|:---------:|:--------------:|
 | **Kotlin** | `jvmMain` | `jsMain` | `nativeMain` |
 | **Scala 3** | `jvm/` | `js/` (Scala.js) | `native/` (Scala Native) |
 | **Clojure** | `clj/` | `cljs/` (ClojureScript) | — |
+
+> **注意:** JVM ターゲットは JNI（`imads-jni`、現在は削除済み）から **FFM**
+> （Foreign Function & Memory API、JDK 22+）に移行しました。`imads-jvm` クレートが FFM
+> ブリッジを提供します。既存のユーザー向け API は変更されていません。内部のバインディング機構のみが
+> 置き換えられました。
 
 ## アーキテクチャ
 
@@ -17,8 +22,8 @@
            └───────┬───────────┬───────────┬──────────┘
                    │           │           │
             ┌──────┴──┐  ┌────┴────┐  ┌───┴───────┐
-            │ JVM/JNI │  │ JS/WASM │  │ Native/C  │
-            │ ImadsNative│ imads-wasm│  │ imads-ffi │
+            │ JVM/FFM │  │ JS/WASM │  │ Native/C  │
+            │imads-jvm│  │imads-wasm│  │ imads-ffi │
             └──────┬──┘  └────┬────┘  └───┬───────┘
                    └──────────┴────────────┘
                          imads-core (Rust)
@@ -27,15 +32,33 @@
 ## ネイティブライブラリのビルド
 
 ```bash
-# JNI shared library (JVM targets)
-cargo build -p imads-jni --release
-
-# C static/shared library (Kotlin/Native, Scala Native)
+# FFM 共有ライブラリ（JVM ターゲット — JDK 22+ が必要）
 cargo build -p imads-ffi --release
 
-# WASM module (JS targets)
-cd imads-wasm && wasm-pack build --target web --release
+# FFM Java ブリッジのコンパイル
+javac -d imads-jvm/target imads-jvm/src/main/java/io/imads/*.java
+
+# C 静的/共有ライブラリ（Kotlin/Native, Scala Native）
+cargo build -p imads-ffi --release
+
+# WASM モジュール（JS ターゲット）
+cd imads-wasm && cargo component build --release
 ```
+
+## JVM FFM の要件
+
+FFM API には **JDK 22 以降**が必要です。実行時に、JVM が `libimads_ffi` 共有ライブラリを
+見つけられる必要があります:
+
+```bash
+# 起動時にライブラリパスを渡す
+java -Djava.library.path=target/release -cp imads-jvm/target your.MainClass
+
+# または LD_LIBRARY_PATH / DYLD_LIBRARY_PATH を設定
+export LD_LIBRARY_PATH=$PWD/target/release:$LD_LIBRARY_PATH
+```
+
+FFM は JNI を完全に置き換えます。`imads-jni` クレートは削除されました。
 
 ---
 
@@ -79,7 +102,7 @@ imads-kotlin/src/
 ├── commonMain/kotlin/io/imads/    # expect declarations + shared types
 │   ├── ImadsTypes.kt              # ImadsEnv, ImadsOutput, ImadsEvaluator
 │   └── ImadsEngine.kt             # expect ImadsConfig, expect ImadsEngine, imadsRun()
-├── jvmMain/kotlin/io/imads/       # actual via JNI (ImadsNative)
+├── jvmMain/kotlin/io/imads/       # actual via FFM (imads-jvm, JDK 22+)
 │   └── ImadsEngine.jvm.kt
 ├── jsMain/kotlin/io/imads/        # actual via imads-wasm
 │   └── ImadsEngine.js.kt
@@ -126,7 +149,7 @@ imads-scala/
 │   ├── Types.scala                     # Env, Output case classes
 │   ├── Evaluator.scala                 # Evaluator trait
 │   └── Imads.scala                     # Imads object + ImadsPlatformOps trait
-├── jvm/src/main/scala/io/imads/       # ImadsPlatform via JNI
+├── jvm/src/main/scala/io/imads/       # ImadsPlatform via FFM (JDK 22+)
 │   └── ImadsPlatform.scala
 ├── js/src/main/scala/io/imads/        # ImadsPlatform via Scala.js → WASM
 │   └── ImadsPlatform.scala
@@ -173,7 +196,7 @@ imads-scala/
 ```
 imads-clj/src/
 ├── cljc/imads/core.cljc       # Shared API (reader conditionals for platform dispatch)
-├── clj/imads/platform.clj     # JVM backend via JNI (ImadsNative)
+├── clj/imads/platform.clj     # JVM backend via FFM (imads-jvm, JDK 22+)
 └── cljs/imads/platform.cljs   # JS backend via WASM (imads-wasm)
 ```
 

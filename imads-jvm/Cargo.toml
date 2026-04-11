@@ -1,6 +1,6 @@
 [package]
-name = "imads-jni"
-version = "1.0.4"
+name = "imads-jvm"
+version = "2.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0 OR LGPL-2.1-or-later"
 
@@ -9,4 +9,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 imads-core = { path = "../imads-core" }
-jni = "0.21"
+imads-ffi = { path = "../imads-ffi" }

@@ -1,5 +1,5 @@
 use crate::core::DefaultBundle;
-use crate::core::acceptance::AcceptanceEngine;
+use crate::core::acceptance::AcceptancePolicy;
 use crate::core::engine::{Engine, EngineConfig};
 use crate::core::poll::DefaultPoll;
 use crate::types::{
@@ -292,12 +292,13 @@ fn dids_assignment_updates_from_history() {
         runtime_cost: 0.0,
     };
     let est = Estimates {
-        f_hat: 0.0,
-        f_se: 0.0,
+        f_hat: vec![0.0],
+        f_se: vec![0.0],
         c_hat: vec![1.0],
         c_se: vec![0.0],
         phi,
         tau_scale: phi.tau.0 as f64,
+        num_objectives: 1,
     };
 
     for k in 0..10 {
@@ -339,12 +340,13 @@ fn dids_assignment_increases_when_delta_high() {
         runtime_cost: 0.0,
     };
     let est = Estimates {
-        f_hat: 0.0,
-        f_se: 0.0,
+        f_hat: vec![0.0],
+        f_se: vec![0.0],
         c_hat: vec![1.0],
         c_se: vec![0.0],
         phi,
         tau_scale: phi.tau.0 as f64,
+        num_objectives: 1,
     };
 
     let mut dids_low = DefaultDids::default();
@@ -407,12 +409,13 @@ fn delta_calibrator_increases_delta_on_false_infeasible() {
         runtime_cost: 0.0,
     };
     let est = Estimates {
-        f_hat: 0.0,
-        f_se: 0.0,
+        f_hat: vec![0.0],
+        f_se: vec![0.0],
         c_hat: vec![1.0],
         c_se: vec![0.0],
         phi,
         tau_scale: phi.tau.0 as f64,
+        num_objectives: 1,
     };
 
     let mut events: Vec<CalibEvent> = Vec::new();
@@ -437,7 +440,7 @@ fn delta_calibrator_increases_delta_on_false_infeasible() {
         });
         // later truth says feasible -> false infeasible
         let jr_t = JobResult::Truth {
-            f: 0.0,
+            f: vec![0.0],
             c: vec![-1.0],
             feasible: true,
             v: 0.0,
@@ -494,20 +497,22 @@ fn dids_level_bucket_false_signal_pushes_a_higher() {
         runtime_cost: 0.0,
     };
     let est_l1 = Estimates {
-        f_hat: 0.0,
-        f_se: 0.0,
+        f_hat: vec![0.0],
+        f_se: vec![0.0],
         c_hat: vec![1.0],
         c_se: vec![0.0],
         phi: phi_l1,
         tau_scale: phi_l1.tau.0 as f64,
+        num_objectives: 1,
     };
     let est_l2 = Estimates {
-        f_hat: 0.0,
-        f_se: 0.0,
+        f_hat: vec![0.0],
+        f_se: vec![0.0],
         c_hat: vec![1.0],
         c_se: vec![0.0],
         phi: phi_l2,
         tau_scale: phi_l2.tau.0 as f64,
+        num_objectives: 1,
     };
 
     let mut dids = DefaultDids::default();
@@ -724,6 +729,8 @@ fn objective_pruning_gate_is_ladder_smc_aware_regression() {
 struct NonFiniteSampleEvaluator;
 
 impl crate::core::evaluator::Evaluator for NonFiniteSampleEvaluator {
+    type Objectives = f64;
+
     fn cheap_constraints(&self, _x: &XReal, _env: &Env) -> bool {
         true
     }
@@ -738,6 +745,9 @@ impl crate::core::evaluator::Evaluator for NonFiniteSampleEvaluator {
     }
     fn solver_bias(&self, _x: &XReal, _tau: Tau, _env: &Env) -> (f64, Vec<f64>) {
         (0.0, vec![0.0])
+    }
+    fn num_objectives(&self) -> usize {
+        1
     }
     fn num_constraints(&self) -> usize {
         1
@@ -836,20 +846,22 @@ fn delta_k_calibrator_updates_k_from_paired_audit() {
     };
 
     let cut_est = Estimates {
-        f_hat: 10.0,
-        f_se: 0.0,
+        f_hat: vec![10.0],
+        f_se: vec![0.0],
         c_hat: vec![5.0],
         c_se: vec![0.0],
         phi: cut_phi,
         tau_scale: cut_phi.tau.0 as f64,
+        num_objectives: 1,
     };
     let pair_est = Estimates {
-        f_hat: 9.0,
-        f_se: 0.0,
+        f_hat: vec![9.0],
+        f_se: vec![0.0],
         c_hat: vec![1.0],
         c_se: vec![0.0],
         phi: pair_phi,
         tau_scale: pair_phi.tau.0 as f64,
+        num_objectives: 1,
     };
 
     let events = vec![
@@ -875,7 +887,7 @@ fn delta_k_calibrator_updates_k_from_paired_audit() {
         CalibEvent {
             id: CandidateId(1),
             result: JobResult::Truth {
-                f: 0.0,
+                f: vec![0.0],
                 c: vec![-1.0],
                 feasible: true,
                 v: 0.0,
@@ -939,28 +951,31 @@ fn delta_k_calibrator_accumulates_multiple_same_s_tau_intervals() {
     };
 
     let cut_est = Estimates {
-        f_hat: 12.0,
-        f_se: 0.0,
+        f_hat: vec![12.0],
+        f_se: vec![0.0],
         c_hat: vec![6.0],
         c_se: vec![0.0],
         phi: cut_phi,
         tau_scale: cut_phi.tau.0 as f64,
+        num_objectives: 1,
     };
     let pair1_est = Estimates {
-        f_hat: 10.0,
-        f_se: 0.0,
+        f_hat: vec![10.0],
+        f_se: vec![0.0],
         c_hat: vec![3.0],
         c_se: vec![0.0],
         phi: pair1_phi,
         tau_scale: pair1_phi.tau.0 as f64,
+        num_objectives: 1,
     };
     let pair2_est = Estimates {
-        f_hat: 9.0,
-        f_se: 0.0,
+        f_hat: vec![9.0],
+        f_se: vec![0.0],
         c_hat: vec![1.0],
         c_se: vec![0.0],
         phi: pair2_phi,
         tau_scale: pair2_phi.tau.0 as f64,
+        num_objectives: 1,
     };
 
     let events = vec![
@@ -1021,7 +1036,7 @@ fn delta_k_calibrator_accumulates_multiple_same_s_tau_intervals() {
         CalibEvent {
             id: CandidateId(7),
             result: JobResult::Truth {
-                f: 8.0,
+                f: vec![8.0],
                 c: vec![-1.0],
                 feasible: true,
                 v: 0.0,
@@ -1072,12 +1087,13 @@ fn dids_precision_signal_pushes_a_higher_even_when_false_rate_is_low() {
         smc: Smc(16),
     };
     let est = Estimates {
-        f_hat: 0.0,
-        f_se: 0.0,
+        f_hat: vec![0.0],
+        f_se: vec![0.0],
         c_hat: vec![1.0],
         c_se: vec![0.0],
         phi,
         tau_scale: phi.tau.0 as f64,
+        num_objectives: 1,
     };
     let meta = EvalMeta {
         phi,
@@ -1177,8 +1193,8 @@ fn balanced_beats_legacy_baseline_on_majority_of_reference_seeds() {
         let mut eng_balanced = Engine::<DefaultBundle>::default();
         let out_balanced = eng_balanced.run(&cfg_for(Preset::Balanced), &env, 1);
 
-        let f_legacy = out_legacy.f_best.expect("legacy should produce f_best");
-        let f_balanced = out_balanced.f_best.expect("balanced should produce f_best");
+        let f_legacy = out_legacy.f_best.as_ref().expect("legacy should produce f_best")[0];
+        let f_balanced = out_balanced.f_best.as_ref().expect("balanced should produce f_best")[0];
 
         if f_balanced <= f_legacy {
             balanced_wins += 1;
@@ -1216,8 +1232,8 @@ fn balanced_uses_no_more_partial_budget_than_throughput_over_reference_seeds() {
         let out_throughput = eng_throughput.run(&cfg_for(Preset::Throughput), &env, 1);
 
         // 품질이 완전히 망가지진 않아야 함 (아주 약한 조건)
-        let f_balanced = out_balanced.f_best.unwrap();
-        let f_throughput = out_throughput.f_best.unwrap();
+        let f_balanced = out_balanced.f_best.as_ref().unwrap()[0];
+        let f_throughput = out_throughput.f_best.as_ref().unwrap()[0];
         assert!(f_balanced.is_finite() && f_throughput.is_finite());
 
         // 둘 다 정상적으로 결과를 내야 함
@@ -1322,8 +1338,8 @@ fn balanced_and_throughput_are_each_deterministic_on_reference_seed() {
     let mut eng_b2 = Engine::<DefaultBundle>::default();
     let out_b2 = eng_b2.run(&cfg_for(Preset::Balanced), &env, 1);
 
-    let f_b1 = out_b1.f_best.expect("balanced should produce f_best");
-    let f_b2 = out_b2.f_best.expect("balanced should produce f_best");
+    let f_b1 = out_b1.f_best.as_ref().expect("balanced should produce f_best")[0];
+    let f_b2 = out_b2.f_best.as_ref().expect("balanced should produce f_best")[0];
     assert_close(f_b1, f_b2, 1e-9);
     assert_eq!(out_b1.x_best, out_b2.x_best);
 
@@ -1334,8 +1350,8 @@ fn balanced_and_throughput_are_each_deterministic_on_reference_seed() {
     let mut eng_t2 = Engine::<DefaultBundle>::default();
     let out_t2 = eng_t2.run(&cfg_for(Preset::Throughput), &env, 1);
 
-    let f_t1 = out_t1.f_best.expect("throughput should produce f_best");
-    let f_t2 = out_t2.f_best.expect("throughput should produce f_best");
+    let f_t1 = out_t1.f_best.as_ref().expect("throughput should produce f_best")[0];
+    let f_t2 = out_t2.f_best.as_ref().expect("throughput should produce f_best")[0];
     assert_close(f_t1, f_t2, 1e-9);
     assert_eq!(out_t1.x_best, out_t2.x_best);
 }

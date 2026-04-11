@@ -60,7 +60,7 @@ fn main() {
             out.stats.partial_steps,
             out.stats.cheap_rejects,
             out.stats.invalid_eval_rejects,
-            format_optional(out.f_best, f64::to_string),
+            format_optional(out.f_best, |v: &Vec<f64>| format!("{:?}", v)),
             format_optional(out.x_best, format_xmesh),
         );
     }

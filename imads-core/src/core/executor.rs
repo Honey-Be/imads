@@ -1,8 +1,8 @@
 use crate::backends::cache::{DecisionCacheBackend, EvalCacheBackend};
-use crate::core::evaluator::Evaluator;
+use crate::core::evaluator::EvaluatorErased;
 use crate::types::{
     CacheTag, DecisionCacheKey, Env, EnvRev, Estimates, EvalCacheKey, EvalMeta, JobResult, Phi,
-    WorkItem, XReal, mesh_to_real,
+    WorkItem, XReal, mesh_to_real_aniso,
 };
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
@@ -49,13 +49,13 @@ impl Default for ExecutorParams {
 /// - Implementations placed behind trait objects must be `Send + Sync`.
 #[derive(Debug, Clone)]
 pub struct ExecCtx<E: EvalCacheBackend + Clone, D: DecisionCacheBackend + Clone> {
-    pub evaluator: Arc<dyn Evaluator>,
+    pub evaluator: Arc<dyn EvaluatorErased>,
     pub env: Arc<Env>,
     pub env_rev: EnvRev,
     pub eval_cache: Arc<E>,
     pub decision_cache: Arc<D>,
     pub ladder_len: usize,
-    pub base_step: f64,
+    pub base_steps: Vec<f64>,
 }
 
 /// Output of executing one `WorkItem`.
@@ -480,7 +480,7 @@ fn execute_one<E: EvalCacheBackend + Clone, D: DecisionCacheBackend + Clone>(
     }
 
     // 3) Compute estimates at this phi.
-    let x_real = match mesh_to_real(&wi.x, ctx.base_step) {
+    let x_real = match mesh_to_real_aniso(&wi.x, &ctx.base_steps) {
         Ok(x_real) => x_real,
         Err(_) => {
             let meta = EvalMeta {
@@ -538,7 +538,7 @@ fn execute_one<E: EvalCacheBackend + Clone, D: DecisionCacheBackend + Clone>(
 }
 
 fn compute_estimates(
-    evaluator: &dyn Evaluator,
+    evaluator: &dyn EvaluatorErased,
     x: &XReal,
     phi: Phi,
     env: &Env,
@@ -569,14 +569,18 @@ fn compute_estimates(
     }
 
     let m = evaluator.num_constraints();
-    let mut f_acc = Welford::default();
+    let num_obj = evaluator.num_objectives();
+    let mut f_accs: Vec<Welford> = vec![Welford::default(); num_obj];
     let mut c_acc: Vec<Welford> = vec![Welford::default(); m];
     for k in 0..s {
         let (f_s, c_s) = evaluator.mc_sample(x, phi, env, k);
-        if !f_s.is_finite() {
-            return None;
+        for (i, acc) in f_accs.iter_mut().enumerate() {
+            let fi = f_s.get(i).copied().unwrap_or(f64::INFINITY);
+            if !fi.is_finite() {
+                return None;
+            }
+            acc.push(fi);
         }
-        f_acc.push(f_s);
         for (j, c_acc_item) in c_acc.iter_mut().enumerate() {
             let cj = *c_s.get(j).unwrap_or(&0.0);
             if !cj.is_finite() {
@@ -588,15 +592,23 @@ fn compute_estimates(
 
     // Deterministic tau-dependent bias.
     let (fb, cb) = evaluator.solver_bias(x, phi.tau, env);
-    if !fb.is_finite() || cb.iter().any(|v| !v.is_finite()) {
+    if fb.iter().any(|v| !v.is_finite()) || cb.iter().any(|v| !v.is_finite()) {
         return None;
     }
 
-    let f_hat = f_acc.mean + fb;
-    let f_se = f_acc.se();
-    if !f_hat.is_finite() || !f_se.is_finite() {
-        return None;
+    let mut f_hat = Vec::with_capacity(num_obj);
+    let mut f_se = Vec::with_capacity(num_obj);
+    for (i, acc) in f_accs.iter().enumerate() {
+        let bi = fb.get(i).copied().unwrap_or(0.0);
+        let fh = acc.mean + bi;
+        let fs = acc.se();
+        if !fh.is_finite() || !fs.is_finite() {
+            return None;
+        }
+        f_hat.push(fh);
+        f_se.push(fs);
     }
+
     let mut c_hat = Vec::with_capacity(m);
     let mut c_se = Vec::with_capacity(m);
     for (j, c_acc_item) in c_acc.iter().enumerate() {
@@ -617,6 +629,7 @@ fn compute_estimates(
         c_se,
         phi,
         tau_scale: phi.tau.0 as f64,
+        num_objectives: num_obj,
     })
 }
 
