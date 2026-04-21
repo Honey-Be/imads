@@ -330,6 +330,45 @@ pub unsafe extern "C" fn imads_engine_run_with_evaluator(
     engine_output_to_ffi(out)
 }
 
+/// Run the engine with a custom evaluator provided via pointer to vtable.
+///
+/// This is equivalent to `imads_engine_run_with_evaluator` but takes a pointer to the
+/// vtable struct instead of by value, for FFI systems that cannot pass structs by value
+/// (e.g. Scala Native).
+///
+/// # Safety
+/// All pointer arguments must be valid, non-null, and not concurrently accessed.
+/// The vtable pointer must point to a valid `ImadsEvaluatorVTable`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imads_engine_run_with_evaluator_ptr(
+    engine: *mut ImadsEngine,
+    cfg: *const EngineConfig,
+    env: *const ImadsEnv,
+    workers: u32,
+    vtable: *const ImadsEvaluatorVTable,
+) -> ImadsOutput {
+    let vtable = unsafe { std::ptr::read(vtable) };
+    unsafe { imads_engine_run_with_evaluator(engine, cfg, env, workers, vtable) }
+}
+
+/// Run the engine with a multi-objective evaluator provided via pointer to vtable.
+///
+/// Pointer-based variant of `imads_engine_run_multi`.
+///
+/// # Safety
+/// All pointer arguments must be valid, non-null, and not concurrently accessed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn imads_engine_run_multi_ptr(
+    engine: *mut ImadsEngine,
+    cfg: *const EngineConfig,
+    env: *const ImadsEnv,
+    workers: u32,
+    vtable: *const ImadsMultiEvaluatorVTable,
+) -> ImadsMultiOutput {
+    let vtable = unsafe { std::ptr::read(vtable) };
+    unsafe { imads_engine_run_multi(engine, cfg, env, workers, vtable) }
+}
+
 /// Free the `x_best_ptr` allocation in an `ImadsOutput`.
 ///
 /// This must be called exactly once per output that has `x_best_ptr != null`.

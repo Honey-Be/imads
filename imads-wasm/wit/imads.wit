@@ -21,6 +21,12 @@ interface types {
         stats: stats,
     }
 
+    record multi-output {
+        f-best: option<list<f64>>,
+        x-best: option<list<s64>>,
+        stats: stats,
+    }
+
     enum preset {
         legacy-baseline,
         balanced,
@@ -29,12 +35,41 @@ interface types {
     }
 }
 
-interface engine {
-    use types.{env, output, preset};
+/// Evaluator resource provided by the host.
+///
+/// The host implements this resource to supply custom objective functions
+/// and constraints to the IMADS engine.
+interface evaluator-host {
+    resource evaluator {
+        /// Monte Carlo sample. Returns [objective, c0, c1, ...].
+        mc-sample: func(x: list<f64>, tau: u64, smc: u32, k: u32) -> list<f64>;
 
+        /// Cheap constraint gate. Return true to accept x.
+        cheap-constraints: func(x: list<f64>) -> bool;
+
+        /// Number of constraints.
+        num-constraints: func() -> u32;
+
+        /// Optional search space dimension. None = infer from config.
+        search-dim: func() -> option<u32>;
+    }
+}
+
+interface engine {
+    use types.{env, output, multi-output, preset};
+    use evaluator-host.{evaluator};
+
+    /// Run the engine with the built-in toy evaluator.
     run: func(preset: preset, env: env, workers: u32) -> output;
+
+    /// Run the engine with a custom single-objective evaluator.
+    run-with-evaluator: func(preset: preset, env: env, workers: u32, evaluator: borrow<evaluator>) -> output;
+
+    /// Run the engine with a custom multi-objective evaluator.
+    run-multi: func(preset: preset, env: env, workers: u32, evaluator: borrow<evaluator>) -> multi-output;
 }
 
 world imads {
+    import evaluator-host;
     export engine;
 }

@@ -1,52 +1,66 @@
 (ns imads.platform
-  "CLJS platform backend via WASM (imads-wasm npm package).
+  "CLJS platform backend via WASM Component Model (imads-wasm npm package).
 
-  Requires the 'imads-wasm' npm package built with --target bundler.
-  Works with shadow-cljs (:npm-module, :esm), or any bundler that resolves
-  npm packages via package.json exports (Webpack 5+, Vite)."
+  The imads-wasm package is built as a WASM Component Model component and
+  transpiled to JS via jco. The engine interface is exported as module-level
+  functions under the 'engine' namespace."
   (:require ["imads-wasm" :as wasm]))
 
+(def ^:private engine (.-engine wasm))
+
 (defn preset-names []
-  (js->clj (.presetNames (.-EngineConfig wasm))))
+  ["legacy_baseline" "balanced" "conservative" "throughput"])
 
 (defn config-from-preset [name]
-  (.fromPreset (.-EngineConfig wasm) name))
+  ;; With Component Model, config is just the preset name (kebab-case).
+  (when-not (some #{name} (preset-names))
+    (throw (js/Error. (str "Unknown preset: " name))))
+  (clojure.string/replace name "_" "-"))
 
-(defn config-free [handle]
-  (.free handle))
+(defn config-free [_handle]
+  ;; No-op: Component Model manages resources automatically.
+  nil)
 
 (defn engine-new []
-  (new (.-Engine wasm)))
+  ;; No-op: engine functions are stateless module-level exports.
+  nil)
 
-(defn engine-free [handle]
-  (.free handle))
+(defn engine-free [_handle]
+  nil)
+
+(defn- build-wit-env [env-data]
+  #js {:runId (:run-id env-data)
+       :configHash (:config-hash env-data)
+       :dataSnapshotId (:data-snapshot-id env-data)
+       :rngMasterSeed (:rng-master-seed env-data)})
 
 (defn- extract-output [out]
-  {:f-best (let [v (.-fBest out)] (when-not (nil? v) v))
-   :x-best (vec (.-xBest out))
-   :truth-evals (.-truthEvals out)
-   :partial-steps (.-partialSteps out)
-   :cheap-rejects (.-cheapRejects out)
-   :invalid-eval-rejects (.-invalidEvalRejects out)})
+  (let [f-best-arr (.-fBest out)
+        f-best (when (and f-best-arr (pos? (.-length f-best-arr)))
+                 (aget f-best-arr 0))
+        x-best-arr (.-xBest out)
+        x-best (if x-best-arr (vec (Array/from x-best-arr)) [])
+        stats (.-stats out)]
+    {:f-best f-best
+     :x-best x-best
+     :truth-evals (.-truthEvals stats)
+     :partial-steps (.-partialSteps stats)
+     :cheap-rejects (.-cheapRejects stats)
+     :invalid-eval-rejects (.-invalidEvalRejects stats)}))
 
-(defn engine-run [engine cfg env-data workers]
-  (let [env (new (.-Env wasm)
-                 (:run-id env-data)
-                 (:config-hash env-data)
-                 (:data-snapshot-id env-data)
-                 (:rng-master-seed env-data))]
-    (extract-output (.run engine cfg env))))
+(defn engine-run [_engine cfg env-data workers]
+  (let [wit-env (build-wit-env env-data)]
+    (extract-output (.run engine cfg wit-env workers))))
 
-(defn engine-run-with-evaluator [engine cfg env-data mc-sample-fn num-constraints cheap-fn workers]
-  (let [env (new (.-Env wasm)
-                 (:run-id env-data)
-                 (:config-hash env-data)
-                 (:data-snapshot-id env-data)
-                 (:rng-master-seed env-data))
-        js-mc (fn [x tau k]
-                (clj->js (mc-sample-fn (js->clj (Array/from x)) tau 0 k)))
-        js-cheap (when cheap-fn
-                   (fn [x]
-                     (boolean (cheap-fn (js->clj (Array/from x))))))]
-    (extract-output
-      (.runWithEvaluator engine cfg env js-mc num-constraints js-cheap))))
+(defn engine-run-with-evaluator [_engine cfg env-data mc-sample-fn num-constraints cheap-fn workers]
+  (let [wit-env (build-wit-env env-data)
+        wit-eval #js {:mcSample (fn [x tau smc k]
+                                  (clj->js (mc-sample-fn (js->clj (Array/from x)) tau smc k)))
+                      :cheapConstraints (fn [x]
+                                          (boolean
+                                            (if cheap-fn
+                                              (cheap-fn (js->clj (Array/from x)))
+                                              true)))
+                      :numConstraints (fn [] num-constraints)
+                      :searchDim (fn [] js/undefined)}]
+    (extract-output (.runWithEvaluator engine cfg wit-env workers wit-eval))))

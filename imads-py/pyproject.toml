@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "imads"
 requires-python = ">=3.12"
-version = "2.0.1"
+version = "2.1.0"
 license = "MIT OR Apache-2.0 OR LGPL-2.1-or-later"
 classifiers = [
     "Programming Language :: Rust",

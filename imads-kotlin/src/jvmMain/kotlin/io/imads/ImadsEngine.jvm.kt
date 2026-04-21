@@ -3,6 +3,8 @@ package io.imads
 import java.lang.foreign.*
 import java.lang.foreign.ValueLayout.*
 import java.lang.invoke.MethodHandle
+import java.lang.invoke.MethodHandles
+import java.lang.invoke.MethodType
 
 // ---- FFM (Foreign Function & Memory) bindings to imads_jvm shared library ----
 
@@ -72,6 +74,28 @@ private object FFM {
     )
 
     val statsOffset: Long = outputLayout.byteOffset(MemoryLayout.PathElement.groupElement("stats"))
+
+    // ImadsEvaluatorVTable struct: 2 fn ptrs + 2 usize + 1 ptr = 40 bytes
+    val vtableLayout: StructLayout = MemoryLayout.structLayout(
+        ADDRESS.withName("cheap_constraints"),
+        ADDRESS.withName("mc_sample"),
+        JAVA_LONG.withName("num_constraints"),
+        JAVA_LONG.withName("search_dim"),
+        ADDRESS.withName("user_data"),
+    )
+
+    val cheapConstraintsFD: FunctionDescriptor = FunctionDescriptor.of(
+        JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS,
+    )
+    val mcSampleFD: FunctionDescriptor = FunctionDescriptor.ofVoid(
+        ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_INT,
+        ADDRESS, ADDRESS, JAVA_LONG, ADDRESS,
+    )
+
+    val engineRunWithEvaluator: MethodHandle = linker.downcallHandle(
+        findOrThrow("imads_engine_run_with_evaluator"),
+        FunctionDescriptor.of(outputLayout, ADDRESS, ADDRESS, envLayout, JAVA_INT, vtableLayout),
+    )
 }
 
 // ---- ImadsConfig (JVM via FFM) ----
@@ -123,10 +147,56 @@ actual class ImadsEngine actual constructor() : AutoCloseable {
         numConstraints: Int,
         workers: Int,
     ): ImadsOutput {
-        // TODO: Custom evaluator via FFM requires upcall stubs for callback function pointers.
-        // For now, fall back to toy evaluator with a warning.
-        System.err.println("Warning: custom evaluator not yet supported via FFM; using toy evaluator")
-        return run(cfg, env, workers)
+        val arena = Arena.ofShared()
+        try {
+            val envSeg = arena.allocate(FFM.envLayout)
+            envSeg.set(JAVA_LONG, 0, env.runId)
+            envSeg.set(JAVA_LONG, 8, env.configHash)
+            envSeg.set(JAVA_LONG, 16, env.dataSnapshotId)
+            envSeg.set(JAVA_LONG, 24, env.rngMasterSeed)
+
+            // mc_sample upcall stub
+            val mcCallback = McSampleCallback(evaluator)
+            val mcHandle = MethodHandles.lookup().findVirtual(
+                McSampleCallback::class.java, "invoke",
+                MethodType.methodType(
+                    Void.TYPE,
+                    MemorySegment::class.java, Long::class.javaPrimitiveType,
+                    Long::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+                    Int::class.javaPrimitiveType,
+                    MemorySegment::class.java, MemorySegment::class.java,
+                    Long::class.javaPrimitiveType, MemorySegment::class.java,
+                ),
+            ).bindTo(mcCallback)
+            val mcStub = FFM.linker.upcallStub(mcHandle, FFM.mcSampleFD, arena)
+
+            // cheap_constraints upcall stub
+            val cheapCallback = CheapConstraintsCallback(evaluator)
+            val cheapHandle = MethodHandles.lookup().findVirtual(
+                CheapConstraintsCallback::class.java, "invoke",
+                MethodType.methodType(
+                    Int::class.javaPrimitiveType,
+                    MemorySegment::class.java, Long::class.javaPrimitiveType,
+                    MemorySegment::class.java,
+                ),
+            ).bindTo(cheapCallback)
+            val cheapStub = FFM.linker.upcallStub(cheapHandle, FFM.cheapConstraintsFD, arena)
+
+            // Build vtable struct
+            val vtableSeg = arena.allocate(FFM.vtableLayout)
+            vtableSeg.set(ADDRESS, 0, cheapStub)
+            vtableSeg.set(ADDRESS, 8, mcStub)
+            vtableSeg.set(JAVA_LONG, 16, numConstraints.toLong())
+            vtableSeg.set(JAVA_LONG, 24, (evaluator.searchDim() ?: 0).toLong())
+            vtableSeg.set(ADDRESS, 32, MemorySegment.NULL)
+
+            val outSeg = FFM.engineRunWithEvaluator.invoke(
+                ensureHandle(), cfg.handle, envSeg, workers, vtableSeg,
+            ) as MemorySegment
+            return extractOutput(outSeg)
+        } finally {
+            arena.close()
+        }
     }
 
     actual override fun close() {
@@ -139,6 +209,33 @@ actual class ImadsEngine actual constructor() : AutoCloseable {
     private fun ensureHandle(): MemorySegment {
         check(handle != MemorySegment.NULL) { "Engine already closed" }
         return handle
+    }
+}
+
+private class McSampleCallback(private val eval: ImadsEvaluator) {
+    fun invoke(
+        x: MemorySegment, dim: Long, tau: Long, smc: Int, k: Int,
+        fOut: MemorySegment, cOut: MemorySegment, m: Long, @Suppress("UNUSED_PARAMETER") userData: MemorySegment,
+    ) {
+        val xArr = DoubleArray(dim.toInt()) { i ->
+            x.reinterpret(dim * JAVA_DOUBLE.byteSize()).getAtIndex(JAVA_DOUBLE, i.toLong())
+        }
+        val result = eval.mcSample(xArr, tau, smc, k)
+        fOut.reinterpret(JAVA_DOUBLE.byteSize()).set(JAVA_DOUBLE, 0, result[0])
+        val mInt = m.toInt()
+        val cSized = cOut.reinterpret(mInt.toLong() * JAVA_DOUBLE.byteSize())
+        for (j in 0 until mInt) {
+            cSized.setAtIndex(JAVA_DOUBLE, j.toLong(), if (j + 1 < result.size) result[j + 1] else 0.0)
+        }
+    }
+}
+
+private class CheapConstraintsCallback(private val eval: ImadsEvaluator) {
+    fun invoke(x: MemorySegment, dim: Long, @Suppress("UNUSED_PARAMETER") userData: MemorySegment): Int {
+        val xArr = DoubleArray(dim.toInt()) { i ->
+            x.reinterpret(dim * JAVA_DOUBLE.byteSize()).getAtIndex(JAVA_DOUBLE, i.toLong())
+        }
+        return if (eval.cheapConstraints(xArr)) 1 else 0
     }
 }
 

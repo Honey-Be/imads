@@ -12,12 +12,24 @@ __all__ = ["Engine", "EngineConfig", "EngineOutput", "Env", "Evaluator"]
 
 
 class Evaluator(Protocol):
-    """Custom evaluator protocol. All methods must be deterministic."""
+    """Custom evaluator protocol. All methods must be deterministic.
+
+    ``mc_sample`` returns ``(objective, constraints)``:
+
+    * Single-objective: ``objective`` is a ``float``.
+    * Multi-objective:  ``objective`` is a ``list[float]`` of length
+      ``num_objectives`` (supply this count via
+      :meth:`Engine.run(num_objectives=...)`).
+
+    ``constraints`` is always a ``list[float]`` of length
+    ``num_constraints`` — each entry is a "slack" value treated as
+    feasible iff it is ``<= 0``.
+    """
 
     def mc_sample(
         self, x: list[float], tau: int, smc: int, k: int
-    ) -> tuple[float, list[float]]:
-        """Return (objective, [c0, c1, ...])."""
+    ) -> "tuple[float | list[float], list[float]]":
+        """Return ``(objective, [c0, c1, ...])``."""
         ...
 
     def cheap_constraints(self, x: list[float]) -> bool:
@@ -86,7 +98,21 @@ class EngineOutput:
 
     @property
     def f_best(self) -> Optional[float]:
+        """Primary (index-0) best objective value.
+
+        For single-objective runs this is the only best value; for
+        multi-objective runs it is the first component of ``f_best_all``.
+        """
         return self._inner.f_best
+
+    @property
+    def f_best_all(self) -> Optional[list[float]]:
+        """All best objective values — length ``num_objectives``.
+
+        For single-objective runs this is a list of length 1; for
+        multi-objective runs it is the full vector returned by the engine.
+        """
+        return self._inner.f_best_all
 
     @property
     def x_best(self) -> Optional[list[int]]:
@@ -127,15 +153,32 @@ class Engine:
         workers: int = 1,
         evaluator: Optional[Evaluator] = None,
         num_constraints: Optional[int] = None,
+        num_objectives: int = 1,
     ) -> EngineOutput:
         """Run the engine.
 
-        If evaluator is provided, num_constraints must also be given.
+        Parameters
+        ----------
+        cfg, env, workers: see :class:`EngineConfig` / :class:`Env`.
+        evaluator: if given, the engine calls ``evaluator.mc_sample`` for
+            every evaluation instead of the built-in toy evaluator.
+            Requires ``num_constraints``.
+        num_constraints: number of constraint slack values returned by
+            the evaluator per call (must be given alongside ``evaluator``).
+        num_objectives: number of objectives returned by the evaluator.
+            Defaults to ``1`` (single-objective). Supply ``>1`` for
+            multi-objective runs, in which case the evaluator must return
+            ``list[float]`` as the first element of the ``mc_sample`` tuple.
         """
         if evaluator is not None:
             assert num_constraints is not None, "num_constraints required with evaluator"
             out = self._inner.run_with_evaluator(
-                cfg._inner, env._native, evaluator, num_constraints, workers
+                cfg._inner,
+                env._native,
+                evaluator,
+                num_constraints,
+                workers,
+                num_objectives,
             )
         else:
             out = self._inner.run(cfg._inner, env._native, workers)

@@ -152,12 +152,14 @@ impl PyEngineOutput {
 struct PyEvaluator {
     obj: Py<PyAny>,
     m: usize,
+    n_obj: usize,
 }
 
 impl std::fmt::Debug for PyEvaluator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PyEvaluator")
             .field("num_constraints", &self.m)
+            .field("num_objectives", &self.n_obj)
             .finish()
     }
 }
@@ -167,7 +169,13 @@ unsafe impl Send for PyEvaluator {}
 unsafe impl Sync for PyEvaluator {}
 
 impl Evaluator for PyEvaluator {
-    type Objectives = f64;
+    // `Vec<f64>` is the most permissive `ObjectiveValues` impl: a
+    // single-objective Python evaluator returns a Python ``float`` which
+    // we wrap into ``vec![x]`` below; a multi-objective evaluator returns
+    // a ``list[float]`` that we extract as ``Vec<f64>`` directly. The
+    // ``EvaluatorErased`` blanket impl then flattens either via
+    // ``to_vec()`` before handing the engine its final ``Vec<f64>``.
+    type Objectives = Vec<f64>;
 
     fn cheap_constraints(&self, x: &XReal, _env: &Env) -> bool {
         Python::attach(|py| {
@@ -179,20 +187,45 @@ impl Evaluator for PyEvaluator {
         })
     }
 
-    fn mc_sample(&self, x: &XReal, phi: Phi, _env: &Env, k: u32) -> (f64, Vec<f64>) {
+    fn mc_sample(&self, x: &XReal, phi: Phi, _env: &Env, k: u32) -> (Vec<f64>, Vec<f64>) {
         Python::attach(|py| {
             let vals = x.as_f64_slice();
             let result = self
                 .obj
                 .call_method(py, "mc_sample", (vals, phi.tau.0, phi.smc.0, k), None)
                 .expect("mc_sample call failed");
-            let (f, c): (f64, Vec<f64>) = result.extract(py).expect("mc_sample return type error");
-            (f, c)
+            // Accept either ``(float, list[float])`` (single-objective) or
+            // ``(list[float], list[float])`` (multi-objective). Extract the
+            // first tuple element as an opaque PyAny and attempt ``f64``
+            // first, falling back to ``Vec<f64>``.
+            let tup = result
+                .downcast_bound::<pyo3::types::PyTuple>(py)
+                .expect("mc_sample must return a 2-tuple")
+                .clone();
+            if tup.len() != 2 {
+                panic!(
+                    "mc_sample must return a 2-tuple (objectives, constraints); got arity {}",
+                    tup.len()
+                );
+            }
+            let obj_any = tup.get_item(0).expect("mc_sample tuple missing objectives");
+            let cons_any = tup.get_item(1).expect("mc_sample tuple missing constraints");
+            let objs: Vec<f64> = if let Ok(single) = obj_any.extract::<f64>() {
+                vec![single]
+            } else {
+                obj_any.extract::<Vec<f64>>().expect(
+                    "mc_sample objective must be float or list[float]",
+                )
+            };
+            let cons: Vec<f64> = cons_any
+                .extract::<Vec<f64>>()
+                .expect("mc_sample constraints must be list[float]");
+            (objs, cons)
         })
     }
 
     fn num_objectives(&self) -> usize {
-        1
+        self.n_obj
     }
 
     fn num_constraints(&self) -> usize {
@@ -237,9 +270,16 @@ impl PyEngine {
     /// Run the engine with a custom Python evaluator object.
     ///
     /// The evaluator must implement:
-    ///   - `mc_sample(x: list[float], tau: int, smc: int, k: int) -> (float, list[float])`
+    ///   - `mc_sample(x: list[float], tau: int, smc: int, k: int) -> (float | list[float], list[float])`
+    ///     (single-objective → float, multi-objective → list[float])
     ///   - Optionally: `cheap_constraints(x: list[float]) -> bool`
-    #[pyo3(signature = (cfg, env, evaluator, num_constraints, workers = 1))]
+    ///
+    /// ``num_objectives`` defaults to 1 so existing single-objective call
+    /// sites remain source-compatible with v2.0.1. Pass ``num_objectives > 1``
+    /// to enable the multi-objective path, in which case ``mc_sample`` must
+    /// return a ``list[float]`` of the appropriate length as its first tuple
+    /// element.
+    #[pyo3(signature = (cfg, env, evaluator, num_constraints, workers = 1, num_objectives = 1))]
     fn run_with_evaluator(
         &mut self,
         cfg: &PyEngineConfig,
@@ -247,10 +287,12 @@ impl PyEngine {
         evaluator: Py<PyAny>,
         num_constraints: usize,
         workers: usize,
+        num_objectives: usize,
     ) -> PyEngineOutput {
         let eval: Arc<dyn EvaluatorErased> = Arc::new(PyEvaluator {
             obj: evaluator,
             m: num_constraints,
+            n_obj: num_objectives,
         });
         let out =
             self.inner

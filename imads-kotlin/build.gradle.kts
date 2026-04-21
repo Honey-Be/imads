@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "io.imads"
-version = "2.0.1"
+version = "2.1.0"
 
 kotlin {
     jvm()
@@ -31,7 +31,7 @@ kotlin {
         }
         val jsMain by getting {
             dependencies {
-                implementation(npm("imads-wasm", "../imads-wasm/pkg"))
+                implementation(npm("imads-wasm", "../imads-wasm/npm"))
             }
         }
     }

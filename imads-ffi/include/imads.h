@@ -144,6 +144,19 @@ struct ImadsOutput imads_engine_run_with_evaluator(struct ImadsEngine *engine,
                                                    struct ImadsEvaluatorVTable vtable);
 
 /**
+ * Run the engine with a custom evaluator provided via pointer to vtable.
+ *
+ * Equivalent to `imads_engine_run_with_evaluator` but takes a pointer to the
+ * vtable struct instead of by value, for FFI systems that cannot pass structs
+ * by value (e.g. Scala Native).
+ */
+struct ImadsOutput imads_engine_run_with_evaluator_ptr(struct ImadsEngine *engine,
+                                                       const ImadsConfig *cfg,
+                                                       const struct ImadsEnv *env,
+                                                       uint32_t workers,
+                                                       const struct ImadsEvaluatorVTable *vtable);
+
+/**
  * Free the `x_best_ptr` allocation in an `ImadsOutput`.
  *
  * This must be called exactly once per output that has `x_best_ptr != null`.
