@@ -199,7 +199,7 @@ impl Evaluator for PyEvaluator {
             // first tuple element as an opaque PyAny and attempt ``f64``
             // first, falling back to ``Vec<f64>``.
             let tup = result
-                .downcast_bound::<pyo3::types::PyTuple>(py)
+                .cast_bound::<pyo3::types::PyTuple>(py)
                 .expect("mc_sample must return a 2-tuple")
                 .clone();
             if tup.len() != 2 {
